@@ -1,0 +1,16 @@
+{
+  "id": "/herdr/",
+  "name": "Herdr · 牧羊人的 AI 團隊",
+  "short_name": "Herdr",
+  "description": "以專案組織你的 AI 團隊，交給協調總控安排協作。",
+  "lang": "zh-Hant",
+  "start_url": "/herdr/",
+  "scope": "/herdr/",
+  "display": "standalone",
+  "background_color": "#17191b",
+  "theme_color": "#17191b",
+  "icons": [
+    {"src":"./icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}

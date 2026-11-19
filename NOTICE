@@ -1,0 +1,14 @@
+Herdr Workbench
+
+Derived from https://github.com/virus11456/herdr/tree/master/extensions/team-work
+Source baseline: 68dd7d6c8bff0f2bb8114f41d65219caa11b1309
+
+The original source is licensed under Apache-2.0; see LICENSE. Retain applicable
+upstream copyright and attribution notices.
+
+This independent workbench modifies the project/agent interface, runtime routing,
+installation, private Tailnet web bridge, PWA assets and background service.
+It is a custom derivative, not an official Herdr release.
+
+Third-party CLIs retain their own licenses and terms. Their binaries, accounts,
+credentials, conversations and user files are not included.

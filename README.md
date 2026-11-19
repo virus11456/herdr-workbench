@@ -91,7 +91,7 @@ herdr-team-runtime --chat <目前對話ID> request list '{}'
 herdr-team-runtime --chat <目前對話ID> response <同一請求ID>
 ```
 
-只有目前總控能操作該專案與團隊。不得偽造終端 ID、複製其他電腦的 `control.json` 或關閉沙箱。Codex 背景啟動器只額外允許該專案自己的私人 runtime 目錄。
+只有目前總控能操作該專案與團隊。不得偽造終端 ID、複製其他電腦的 `control.json` 或關閉沙箱。Codex 啟動器保留既有權限設定，不加入額外可寫目錄。官方通知 hook 只在核對真實父子終端與專案綁定後，把已登記 worker 的回覆送回目前總控；它不接受任意命令或替代理解除沙箱。
 
 ```sh
 node --test team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs

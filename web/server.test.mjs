@@ -1,0 +1,42 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
+import {saveRoster,context} from '../team-runtime.mjs';
+import {createServer} from './server.mjs';
+test('web bridge enforces Tailnet identity, origin, CSRF and registered project scope',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-web-unit-'));const app=path.join(dir,'app'),project=path.join(dir,'project');fs.mkdirSync(app);fs.mkdirSync(project);
+ fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[{folder:project,name:'Unit project',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
+ saveRoster(context(project,null),[{id:'member',name:'成員',provider:'codex',level:'worker',group:'',brief:''}]);
+ const server=createServer({projectRoot:path.join(dir,'new-projects'),allowedLogin:'owner@example.test',origin:'https://unit.tail.test',appHome:app,core:()=>{throw Error('No real core allowed');}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port;
+ assert.equal((await fetch(base+'/api/state')).status,403);
+ assert.equal((await fetch(base+'/api/state',{headers:{'Tailscale-User-Login':'other@example.test'}})).status,403);
+ const headers={'Tailscale-User-Login':'owner@example.test'};
+ // PWA assets retain the same Tailnet access boundary as the chat UI.
+ assert.equal((await fetch(base+'/manifest.webmanifest')).status,403);
+ const manifestReply=await fetch(base+'/herdr/manifest.webmanifest',{headers});
+ assert.match(manifestReply.headers.get('content-type'),/application\/manifest\+json/);
+ const manifest=await manifestReply.json();assert.equal(manifest.scope,'/herdr/');assert.equal(manifest.start_url,'/herdr/');assert.equal(manifest.display,'standalone');
+ for(const icon of manifest.icons){const r=await fetch(base+'/herdr/'+icon.src.replace('./',''),{headers});assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'image/png');assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0,8).toString('hex'),'89504e470d0a1a0a');}
+ assert.match((await fetch(base+'/sw.js',{headers})).headers.get('content-type'),/javascript/);
+ assert.equal((await fetch(base+'/config.json',{headers})).status,404);
+ const data=await (await fetch(base+'/api/state',{headers})).json();assert.equal(data.agents.length,1);assert.equal(data.terminals.length,0);
+ const post=(route,body,extra={})=>fetch(base+route,{method:'POST',headers:{...headers,Origin:'https://unit.tail.test','Content-Type':'application/json','X-Herdr-CSRF':data.csrfToken,...extra},body:JSON.stringify({project:data.project,chat:data.chat,...body})});
+ assert.equal((await post('/api/message',{text:'do not send'}, {'X-Herdr-CSRF':'wrong'})).status,403);
+ assert.equal((await post('/api/message',{text:'do not send'}, {Origin:'https://evil.test'})).status,403);
+ assert.equal((await post('/api/message',{project:'unregistered',text:'do not send'})).status,404);
+ const renamed=await (await post('/api/coordinator',{name:'  牧羊人總控  '})).json();assert.equal(renamed.name,'牧羊人總控');
+ assert.equal((await (await fetch(base+'/api/state',{headers})).json()).coordinatorName,'牧羊人總控');
+ assert.equal((await post('/api/coordinator',{name:'\n'})).status,400);
+ const id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',body={text:'@member Unit fixture only',id};
+ const one=await (await post('/api/message',body)).json(),two=await (await post('/api/message',body)).json();assert(one.queued);assert.equal(one.id,two.id);
+ const logs=fs.readFileSync(path.join(project,'.herdr-team/conversations/unit-chat/messages.jsonl'),'utf8').trim().split('\n');assert.equal(logs.length,1);
+ assert.equal((await fetch(base+'/../../etc/passwd',{headers})).status,404);
+ const agents=[...data.agents,{...data.agents[0],id:'frontend',name:'Frontend'}];
+ const saved=await (await post('/api/roster',{agents})).json();assert.equal(saved.started,false);
+ const next=await (await post('/api/chat',{})).json();assert.match(next.chat,/^web-/);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(project,'.herdr-team/roster.json'))).length,2);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(app,'team-chat.json'))).chatId,next.chat);
+ const created=await (await post('/api/project',{name:'New project'})).json();assert(created.project);assert(created.chat);
+ const newState=await (await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(newState.agents.length,0);assert.equal(newState.projects.length,2);
+ assert.equal((await post('/api/project',{name:'x'.repeat(81)})).status,400);
+});

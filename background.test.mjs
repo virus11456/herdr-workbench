@@ -1,0 +1,54 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {context,saveRoster,roster,enqueueChat,drainChats,setCoordinatorName,coordinatorProfile,captureReply} from './team-runtime.mjs';
+import {deploymentPlan,applyDeployment,mergeProjects} from './setup.mjs';
+function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'workbench-headless-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const project=path.join(root,"project space's");fs.mkdirSync(project);return{root,project};}
+test('Drive project files and private runtime state remain separate, with project-scoped names and rosters',t=>{
+ const {root,project}=fixture(t),config={headless:true,stateRoot:path.join(root,'private-state')};
+ const c=context(project,null,()=>{throw Error('No actual core');},'unit-chat',config);saveRoster(c,[]);setCoordinatorName(c,'牧羊人總控');
+ assert.equal(coordinatorProfile(context(project,null,null,'another-chat',config)).name,'牧羊人總控');assert.deepEqual(roster(c),[]);
+ assert(!fs.existsSync(path.join(project,'.herdr-team')));assert(c.teamDir.startsWith(config.stateRoot+path.sep));assert.throws(()=>setCoordinatorName(c,'\n'),/名稱/);
+ const other=path.join(root,'other');fs.mkdirSync(other);assert.equal(coordinatorProfile(context(other,null,null,null,config)).name,'協調總控');
+});
+test('background chat starts core directly, waits for idle, and sends the same queued task only once',t=>{
+ const {root,project}=fixture(t),calls=[];let ready=false;
+ const run=(cmd,args)=>{calls.push([cmd,args]);assert.equal(cmd,'hc','desktop app must never be invoked');if(args[0]==='run')return{address:'tunitowner'};if(args[0]==='get')return{address:'tunitowner',state:'live',foreground:{argv:['claude']},status:{app:'claude-code',state:ready?'idle':'working'}};if(args[0]==='send')return{started:true};throw Error(args.join(' '));};
+ const c=context(project,null,run,'unit-chat',{headless:true,stateRoot:path.join(root,'private-state')});enqueueChat(c,'Unit fixture only; never run a real agent');
+ assert.equal(drainChats(c).reason,'starting');assert.equal(drainChats(c).reason,'working');ready=true;assert.equal(drainChats(c).sent,1);assert.equal(drainChats(c).pending,0);
+ assert.equal(calls.filter(([,a])=>a[0]==='run').length,1);assert.equal(calls.filter(([,a])=>a[0]==='send').length,1);assert(!fs.existsSync(path.join(project,'.herdr-team')));
+});
+test('deployment plan is read-only; apply preserves previous settings and handles quoted paths',t=>{
+ const {root,project}=fixture(t),home=path.join(root,"app's home"),bin=path.join(root,'bin');
+ const input={home,bin,core:path.join(root,'core'),launchAgents:path.join(root,'agents'),origin:'https://unit.tail.test',login:'owner@example.test',projectRoot:project};
+ const tools=Object.fromEntries(['node','hc','claude','codex','mcode'].map(n=>[n,path.join(bin,n)]));const plan=deploymentPlan(input,tools);assert(!fs.existsSync(home));
+ const backup=applyDeployment(plan);assert(fs.existsSync(path.join(backup,'manifest.json')));const runtime=fs.readFileSync(path.join(bin,'herdr-team-runtime'),'utf8');assert(runtime.includes('HERDR_WORKBENCH_HOME='));assert(!runtime.includes('@NODE_SHELL@'));
+ const file=path.join(home,'web/config.json');fs.writeFileSync(file,'{"keep":"fixture"}');const saved=applyDeployment(plan),manifest=JSON.parse(fs.readFileSync(path.join(saved,'manifest.json')));const item=manifest.files.find(x=>x.target===file);assert.equal(fs.readFileSync(item.backup,'utf8'),'{"keep":"fixture"}');
+ assert.throws(()=>deploymentPlan({...input,origin:'http://unit.test'},tools),/HTTPS/);
+});
+
+test('migration merges desktop and web chats without losing existing workbench conversations',t=>{
+ const {project}=fixture(t);
+ const merged=mergeProjects([[{folder:project,name:'Current',chats:[{id:'new-chat',createdAt:3}]}],[{folder:project,name:'Desktop',chats:[{id:'old-chat',createdAt:1},{id:'second-chat',createdAt:2}]}],[{folder:project,name:'Stale web',chats:[{id:'old-chat',createdAt:1}]}]]);
+ assert.equal(merged.length,1);assert.equal(merged[0].name,'Current');assert.deepEqual(merged[0].chats.map(c=>c.id),['old-chat','second-chat','new-chat']);
+});
+test('worker notifications only report to the registered real parent and reject duplicates or foreign workers',t=>{
+ const {root,project}=fixture(t),config={headless:true,stateRoot:path.join(root,'private')};
+ const c=context(project,'tunitworker',()=>({parent:'tunitowner',turn:1,labels:{'team.owner':'tunitowner','team.chat':'unit-chat'}}),'unit-chat',config);
+ fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitowner'}));
+ fs.writeFileSync(path.join(c.teamDir,'worker-bindings.json'),JSON.stringify({tunitworker:{owner:'tunitowner',chat:'unit-chat',name:'Codex',sentAt:Date.now()-1000}}));
+ const event={type:'agent-turn-complete','turn-id':'unit-turn','last-assistant-message':'Unit result: 55'};
+ assert.equal(captureReply(event,c,'Codex').captured,true);assert.equal(captureReply(event,c,'Codex').reason,'duplicate');
+ assert.equal(fs.readdirSync(path.join(c.teamDir,'outbox')).length,1);
+ const foreign={...c,terminal:'tunitforeign'};assert.equal(captureReply(event,foreign,'Codex').reason,'unregistered_worker');
+ const tampered={...c,run:()=>({parent:'tunitother',labels:{}})};assert.equal(captureReply({...event,'turn-id':'other-turn'},tampered,'Codex').reason,'foreign_worker');
+});
+test('message retries reuse durable queue identity across restarts and reject different payloads',t=>{
+ const {root,project}=fixture(t),config={headless:true,stateRoot:path.join(root,'private')};
+ const id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',c=context(project,null,null,'unit-chat',config);
+ const first=enqueueChat(c,'Unit retry fixture',id),restarted=context(project,null,null,'unit-chat',config);
+ assert.deepEqual(enqueueChat(restarted,'Unit retry fixture',id),first);
+ const queue=path.join(c.teamDir,'chat-queue');assert.equal(fs.readdirSync(queue).length,1);
+ fs.renameSync(path.join(queue,id+'.json'),path.join(queue,id+'.json.sent'));
+ assert.deepEqual(enqueueChat(restarted,'Unit retry fixture',id),first);
+ assert.throws(()=>enqueueChat(restarted,'Different task',id),/其他內容/);
+ assert.equal(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').length,1);
+});
