@@ -1,8 +1,10 @@
-// Fullscreen CSS owns the resting size. iOS standalone innerHeight can exclude
-// the status bar even when 100vh covers it; never copy that value onto the shell.
+// Contained viewport: use only the rectangle WebKit exposes as visible.
+// Expanding to 100vh can place the composer behind iOS system chrome.
 export function viewportLayout({baselineHeight,visualHeight,offsetTop=0,scale=1,editing=false,wasKeyboardOpen=false}) {
- const keyboardOpen=scale===1&&(editing||wasKeyboardOpen)&&Number.isFinite(visualHeight)&&baselineHeight-visualHeight>120;
- return {keyboardOpen,height:keyboardOpen?Math.round(visualHeight):null,top:keyboardOpen?Math.max(0,Math.round(offsetTop)):0};
+ const validVisual=scale===1&&Number.isFinite(visualHeight)&&visualHeight>0;
+ const height=Math.round(validVisual?Math.min(baselineHeight,visualHeight):baselineHeight);
+ const keyboardOpen=validVisual&&(editing||wasKeyboardOpen)&&baselineHeight-visualHeight>120;
+ return {keyboardOpen,height,top:keyboardOpen?Math.max(0,Math.round(offsetTop)):0};
 }
 export function bindViewport(win,doc){
  const root=doc.documentElement;
@@ -15,8 +17,9 @@ export function bindViewport(win,doc){
   const layout=viewportLayout({baselineHeight,visualHeight:view?.height,offsetTop:view?.offsetTop,scale:view?.scale,editing:editing(),wasKeyboardOpen:keyboardOpen});
   keyboardOpen=layout.keyboardOpen;
   root.classList.toggle('keyboard-open',keyboardOpen);
-  if(layout.height===null){root.style.removeProperty('--keyboard-height');root.style.removeProperty('--keyboard-top');}
-  else{root.style.setProperty('--keyboard-height',layout.height+'px');root.style.setProperty('--keyboard-top',layout.top+'px');}
+  root.style.setProperty('--app-height',layout.height+'px');
+  root.style.setProperty('--keyboard-height',layout.height+'px');
+  root.style.setProperty('--keyboard-top',layout.top+'px');
  }
  function schedule(){if(!frame)frame=win.requestAnimationFrame(sync);}
  // iOS can emit focus/blur before the keyboard resize animation has finished.
@@ -29,4 +32,10 @@ export function bindViewport(win,doc){
  win.visualViewport?.addEventListener('scroll',schedule,{passive:true});
  doc.addEventListener('focusin',focusChanged);doc.addEventListener('focusout',focusChanged);
  sync();
+}
+
+export function layoutDiagnostics(win,doc){
+ const rect=id=>{const r=doc.getElementById(id)?.getBoundingClientRect();return r?{top:Math.round(r.top),bottom:Math.round(r.bottom),height:Math.round(r.height)}:null;};
+ const view=win.visualViewport,header=doc.querySelector('header'),style=header?win.getComputedStyle(header):null;
+ return {build:'20261120-contained6',standalone:win.matchMedia('(display-mode:standalone)').matches||win.navigator.standalone===true,screen:{width:win.screen.width,height:win.screen.height},window:{width:win.innerWidth,height:win.innerHeight},document:{width:doc.documentElement.clientWidth,height:doc.documentElement.clientHeight},visualViewport:view?{height:Math.round(view.height),offsetTop:Math.round(view.offsetTop),scale:view.scale}:null,keyboardOpen:doc.documentElement.classList.contains('keyboard-open'),app:rect('app'),composer:rect('composer'),header:header?{top:Math.round(header.getBoundingClientRect().top),bottom:Math.round(header.getBoundingClientRect().bottom),filter:style.filter,backdropFilter:style.backdropFilter,transform:style.transform}:null};
 }

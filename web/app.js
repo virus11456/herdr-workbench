@@ -1,4 +1,4 @@
-import {bindViewport} from './viewport.mjs';
+import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
@@ -203,7 +203,7 @@ compactMode.addEventListener('change',()=>{document.body.classList.remove('show-
 function fitDraft(){const input=$('draft');input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
 const oldDraftInput=$('draft').oninput;$('draft').oninput=event=>{oldDraftInput(event);fitDraft();};
 bindViewport(window,document);
-document.documentElement.dataset.layoutBuild='20261120-viewport5';
+document.documentElement.dataset.layoutBuild='20261120-contained6';
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
@@ -217,3 +217,9 @@ const renameCurrent=()=>editAgent(currentAgent()||{id:'__coordinator__',name:sta
 $('title').onclick=renameCurrent;$('title').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();renameCurrent();}};
 
 $('storage-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('storage',{folder:$('storage-folder').value.trim()});await refresh();notice('已設定新專案的 Drive 資料夾；雲端同步請查看 Drive 桌面版。');$('storage-status').textContent='Google Drive 資料夾已設定；雲端同步請查看 Drive 桌面版。';}catch(error){notice(error.message);}finally{b.disabled=false;}};
+
+$('copy-layout').onclick=async()=>{
+ const text=JSON.stringify(layoutDiagnostics(window,document),null,2);
+ $('layout-diagnostics').textContent=text;$('layout-diagnostics').hidden=false;
+ try{await navigator.clipboard.writeText(text);notice('已複製版面診斷，內容只有視窗尺寸，不含對話。');}catch{notice('無法自動複製，可選取下方的版面診斷文字。');}
+};
