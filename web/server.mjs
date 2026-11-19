@@ -22,6 +22,8 @@ export function createServer(config) {
   const ctx=(folder,terminal=null,run,chat=null)=>context(folder,terminal,run,chat,config.headless?config:undefined);
   const extraFile=path.join(home,'web','chats.json');
   const projectFile=path.join(home,'web','projects.json');
+  const activeFile=path.join(home,'web','selection.json');
+  const rememberSelection=(p,chat)=>write(activeFile,{project:p.id||projectId(p.folder),chat});
   const csrf=randomBytes(32).toString('hex');let lastMessages=new Map();
   const projects=()=>{
     const shared=read(path.join(home,'shared.json'),{}),extra=read(extraFile,[]);
@@ -32,13 +34,20 @@ export function createServer(config) {
       return {...p,id:projectId(p.folder),chats:chats.filter(c=>validChat(c.id))};
     });
   };
-  const selection=(project,chat)=>{
-    const list=projects(),p=project?list.find(p=>p.id===project):list[0];
+  const choose=(project,chat)=>{
+    const list=projects(),saved=read(activeFile),handoff=read(path.join(home,'team-chat.json'));
+    const fallback=list.find(p=>p.id===saved?.project)||list.find(p=>p.folder===handoff?.folder)||list[0];
+    const p=project?list.find(p=>p.id===project):fallback;
     if(!p)throw failure('請先建立工作專案。',404);
-    const c=chat?p.chats.find(c=>c.id===chat):p.chats.at(-1);
-    if(!c)throw failure('找不到已登記的對話。',404);
+    const resumed=!project?(saved?.project===p.id?saved.chat:handoff?.folder===p.folder?handoff.chatId:null):null;
+    const selected=chat?p.chats.find(c=>c.id===chat):p.chats.find(c=>c.id===resumed)||p.chats.at(-1);
+    if(!selected)throw failure('找不到已登記的對話。',404);
+    return {p,chat:selected.id};
+  };
+  const selection=(project,requestedChat)=>{
+    const {p,chat}=choose(project,requestedChat);
     let folder;try{folder=fs.realpathSync(p.folder);}catch{throw failure('專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',503);}
-    return {p,chat:c.id,c:ctx(folder,null,undefined,c.id==='legacy'?null:c.id)};
+    return {p,chat,c:ctx(folder,null,undefined,chat==='legacy'?null:chat)};
   };
   const core=async args=>{
     if(config.core)return config.core(args);
@@ -47,9 +56,10 @@ export function createServer(config) {
   const state=async url=>{
     const list=projects();const summary=list.map(p=>{let profile={name:'協調總控'},agents=[],available=true;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,agents,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
     if(!list.length)return {projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
-    const picked=summary.find(p=>p.id===url.searchParams.get('project'))||summary[0];
-    if(picked&&!picked.available)return{projects:summary,project:picked.id,chat:picked.chats.at(-1)?.id,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
-    const {p,chat,c}=selection(url.searchParams.get('project'),url.searchParams.get('chat'));
+    const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
+    const picked=summary.find(p=>p.id===choice.p.id);
+    if(picked&&!picked.available)return{projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    const {p,chat,c}=selection(choice.p.id,choice.chat);
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
     let terminals=[],coreError=null;
@@ -62,7 +72,7 @@ export function createServer(config) {
       }catch{coreError='目前無法取得代理終端狀態。';}
     }
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
-    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,coordinatorReady:!!terminals[0]?.status?.app,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminals.map(t=>({address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,agentId:t.labels?.['team.agent']||null})),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
@@ -100,9 +110,10 @@ export function createServer(config) {
           const project={folder,name:data.name.trim(),chats:[{id:chat,title:'新對話',createdAt:Date.now()}]};
           saveRoster(ctx(folder,null),[]);records.push(project);write(projectFile,records);
           write(path.join(home,'team-chat.json'),{folder,name:project.name,chatId:chat,requestId:randomUUID()});
-          json(200,{project:projectId(folder),chat});return;
+          rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/select'){rememberSelection(p,chat);json(200,{project:p.id,chat});return;}
         if(route==='/api/coordinator'){json(200,setCoordinatorName(c,data.name));return;}
         if(route==='/api/message'){
           if(typeof data.text!=='string'||!data.text.trim()||data.text.length>12000)throw failure('請填寫任務（最多 12000 字）。');
@@ -110,7 +121,7 @@ export function createServer(config) {
           const key=p.id+':'+chat+':'+data.id;
           if(lastMessages.has(key)){json(200,lastMessages.get(key));return;}
           // Queue through the existing runtime. This endpoint cannot invoke arbitrary CLI commands.
-          const result=enqueueChat(c,data.text,data.id);lastMessages.set(key,result);
+          const result=enqueueChat(c,data.text,data.id);rememberSelection(p,chat);lastMessages.set(key,result);
           if(lastMessages.size>1000)lastMessages.delete(lastMessages.keys().next().value);
           json(200,result);return;
         }
@@ -120,7 +131,7 @@ export function createServer(config) {
           const extra=read(extraFile,[]);if(extra.length>=1000)throw failure('對話數量已達上限。');extra.push(next);write(extraFile,extra);
           // The native mod consumes this documented handoff file and registers the new conversation itself.
           write(path.join(home,'team-chat.json'),{folder:p.folder,chatId:next.id,requestId:randomUUID()});
-          json(200,{chat:next.id,project:p.id});return;
+          rememberSelection(p,next.id);json(200,{chat:next.id,project:p.id});return;
         }
         throw failure('找不到操作。',404);
       }

@@ -38,5 +38,13 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  assert.equal(JSON.parse(fs.readFileSync(path.join(app,'team-chat.json'))).chatId,next.chat);
  const created=await (await post('/api/project',{name:'New project'})).json();assert(created.project);assert(created.chat);
  const newState=await (await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(newState.agents.length,0);assert.equal(newState.projects.length,2);
+ const resumed=await (await fetch(base+'/api/state',{headers})).json();assert.equal(resumed.project,created.project);assert.equal(resumed.chat,created.chat);
+ assert.equal((await post('/api/select',{project:data.project,chat:data.chat})).status,200);
+ const otherClient=await (await fetch(base+'/api/state',{headers})).json();assert.equal(otherClient.project,data.project);assert.equal(otherClient.chat,data.chat);
+ assert.equal((await post('/api/select',{project:'unknown',chat:data.chat})).status,404);
+ assert.equal((await post('/api/select',{project:created.project,chat:created.chat},{'X-Herdr-CSRF':'invalid'})).status,403);
+ const stillSelected=await (await fetch(base+'/api/state',{headers})).json();assert.equal(stillSelected.project,data.project);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(app,'web/selection.json'))).chat,data.chat);
+ const html=await (await fetch(base+'/',{headers})).text();assert(html.includes('copy-chat-link'));
  assert.equal((await post('/api/project',{name:'x'.repeat(81)})).status,400);
 });

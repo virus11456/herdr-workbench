@@ -40,7 +40,7 @@ test('custom agents route through coordinator with current roster and target met
   assert.throws(()=>routeMessage('@developer ',roster(c)),/輸入任務/);
   const msg=enqueueChat(c,'@planner 規劃協作');assert.equal(msg.target,'planner');
   const queued=JSON.parse(fs.readFileSync(path.join(c.teamDir,'chat-queue',msg.id+'.json')));
-  assert.match(queued.text,/小組主管/);assert.match(queued.text,/queued 不是成功/);
+  assert.match(queued.text,/小組主管/);assert.equal(queued.original,'@planner 規劃協作');
   const event=JSON.parse(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim());
   assert.equal(event.target,'planner');
 });

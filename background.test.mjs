@@ -52,3 +52,15 @@ test('message retries reuse durable queue identity across restarts and reject di
  assert.throws(()=>enqueueChat(restarted,'Different task',id),/其他內容/);
  assert.equal(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').length,1);
 });
+
+test('queued tasks use the latest project roster at delivery, and never silently change a removed recipient',t=>{
+ const {root,project}=fixture(t),calls=[],config={headless:true,stateRoot:path.join(root,'private')};
+ const run=(cmd,args)=>{assert.equal(cmd,'hc');calls.push(args);if(args[0]==='get')return{address:'tunitowner',state:'live',foreground:{argv:['claude']},status:{app:'claude-code',state:'idle'}};if(args[0]==='send')return{started:true};throw Error(args.join(' '));};
+ const c=context(project,null,run,'unit-chat',config);fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitowner',startedAt:Date.now()}));
+ enqueueChat(c,'Unit fixture queued before members were added');
+ saveRoster(c,[{id:'engineer',name:'工程師',provider:'codex',level:'worker',group:'',brief:'檢查成果'}]);
+ assert.equal(drainChats(c).sent,1);const delivered=calls.find(a=>a[0]==='send')[2];assert(delivered.includes('工程師'));assert(delivered.includes('檢查成果'));assert(delivered.includes('queued 不是成功'));
+ fs.rmSync(path.join(c.teamBase,'chat-delivery.json'));
+ enqueueChat(c,'@engineer Unit fixture for an explicitly selected role');saveRoster(c,[]);
+ assert.equal(drainChats(c).sent,0);assert.equal(calls.filter(a=>a[0]==='send').length,1);assert.equal(fs.readdirSync(path.join(c.teamDir,'chat-queue')).filter(n=>n.endsWith('.json')).length,1);
+});

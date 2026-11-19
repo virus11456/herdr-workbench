@@ -2,3 +2,5 @@ config.json
 chats.json
 logs/
 projects.json
+
+selection.json

@@ -137,7 +137,6 @@ export function log(c, role, text, kind = role === '你' ? 'user' : 'progress', 
 export function enqueueChat(c, text, id=randomUUID()) {
   const original=String(text).trim(), routed=routeMessage(original,roster(c));
   if (!original) throw new Error('請先輸入訊息。');
-  routed.text=teamBrief(c)+'\n\n'+routed.text;
   if(!/^[a-f0-9-]{36}$/.test(id))throw Error('Invalid message ID.');
   const dir=path.join(paths(c).dir,'chat-queue');
   for(const suffix of ['.json','.json.sent']){
@@ -192,7 +191,9 @@ export function drainChats(c) {
     if(lease && Date.now()-lease.time<2500)return{sent:0,pending:files.length,reason:'awaiting_turn'};
     const {name,msg}=files[0];
     try {
-      c.run('hc',['send',control.terminal,msg.text]);
+      const routed=routeMessage(msg.original,roster(c));
+      if(routed.target!==msg.target)throw Error('Queued recipient changed; refusing to redirect.');
+      c.run('hc',['send',control.terminal,teamBrief(c)+'\n\n'+routed.text]);
       save(leaseFile,{terminal:control.terminal,time:Date.now()});
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));
       log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent'});

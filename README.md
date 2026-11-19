@@ -71,6 +71,12 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 
 新專案的控制檔、對話、請求與角色設定保存在主機 `runtime/projects/`，不放入 Drive。資料夾「已設定」不代表雲端上傳驗證通過，需確認 Drive 同步狀態並回讀檔案。釋放空間只用檔案提供者的「移除下載項目」，不得刪除同步原檔；執行中、未驗證資料必須保留。本倉庫不帶作者的私人備份排程。
 
+## 圖解教學
+
+完整操作流程見 [工作台操作教學](docs/USAGE.md)：建立專案、加入及改名代理、跨裝置接續、交付任務、主機授權與成果驗收。截圖使用專用教學專案；響應式尺寸與 iOS 實機結果分開記錄。
+
+![實際工作台首頁](docs/images/01-project-chat-desktop.png)
+
 ## 日常操作
 
 1. 新增／選擇專案，預設只有一個總控。
@@ -94,10 +100,16 @@ herdr-team-runtime --chat <目前對話ID> response <同一請求ID>
 只有目前總控能操作該專案與團隊。不得偽造終端 ID、複製其他電腦的 `control.json` 或關閉沙箱。Codex 啟動器保留既有權限設定，不加入額外可寫目錄。官方通知 hook 只在核對真實父子終端與專案綁定後，把已登記 worker 的回覆送回目前總控；它不接受任意命令或替代理解除沙箱。
 
 ```sh
-node --test team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs
+npm test
 ```
 
 自動測試使用隔離目錄與模擬 core，不花模型額度。開發期間已做過三種引擎派工回報、兩個 Codex 透過總控交接的實測；這不是其他帳號／新機的保證。背景啟動、關閉桌面後運作及手機版面仍須分別依版本實測，不能用單元測試取代。
+
+## 跨裝置同步
+
+同一個 PWA 入口讀取同一主機資料。一般入口接續最近選取的專案／對話；「專案管理 → 複製對話連結」可讓另一台裝置明確開啟同一個 project/chat。名冊是專案共用，對話與清單依 chat 分開。切換裝置後先核對專案名稱；已開啟的不同對話可各自保留，不會強迫其他裝置跳走。
+
+舊原生 mod 的索引與背景工作台並非即時雙向同步；日常跨裝置使用同一個 PWA。匯入桌面版只登錄既有資料位置。
 
 ## 更新、移轉與還原
 
@@ -106,6 +118,12 @@ node --test team-runtime.test.mjs background.test.mjs web/server.test.mjs web/fo
 `--import-desktop` 可登錄本機原生介面的專案與對話位置，保留原位置，不複製憑證。舊專案 runtime 保持相容位置，新專案採分離的私人 runtime。這不是跨電腦帳號搬移工具。
 
 停止服務：`launchctl bootout gui/$(id -u)/dev.herdr.workbench-web`，以及對應的 `queue` job。還原前先停止服務，再依本機備份清單恢復；不要刪除專案或帳號設定。停止 Web 不會自動終止 core 中的代理。
+
+## 安裝後與重開機檢查
+
+在安裝來源目錄執行 `node verify-host.mjs`。這是唯讀檢查：Node／CLI 版本、兩個背景服務、佇列心跳、worker 範本、真正 Tailscale HTTPS 入口及已設定 Drive 資料夾。它不印出私人設定、憑證或對話，也不會啟動代理或接受權限。`passed=true` 代表這些當下檢查通過，不代表三種引擎都已登入。
+
+驗證重新開機時，先完成或停止自己的工作並保存檔案，親自重開機、登入 macOS 與 Tailscale，再跑一次檢查。只有實際重開機後讀到新 bootTime 且服務恢復，才記錄重開機通過；本版本仍待新機及重開機實測。
 
 ## 發佈範圍
 

@@ -4,7 +4,8 @@ import {formatMessage} from './format.mjs';
 const $=id=>document.getElementById(id);
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax'};
 const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-height:520px)');
-let state=null,selection={project:null,chat:null},selectedAgent=null,details=false,historyVisible=false,editing=null,posting=false,revision=0;
+const initialQuery=new URLSearchParams(location.search);
+let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=null,details=false,historyVisible=false,editing=null,posting=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='';
 function hydrateSheep(wrap){
@@ -48,7 +49,7 @@ const status=t=>!t?'尚未啟動':t.state==='finished'?'已結束':({working:'�
 const draftKey=()=>`herdr-draft:${selection.project}:${selection.chat}:${selectedAgent||'team'}`;
 function persistDraft(){try{localStorage.setItem(draftKey(),$('draft').value);}catch{}}
 function restoreDraft(){try{$('draft').value=localStorage.getItem(draftKey())||'';}catch{$('draft').value='';}updateSend();}
-function updateSend(){$('send').disabled=posting||!state?.project||state?.projectAvailable===false||!$('draft').value.trim();}
+function updateSend(){$('send').disabled=posting||!state?.project||state?.projectAvailable===false||!$('draft').value.trim();fitDraft();}
 function notice(text){$('notice').textContent=text;}
 async function api(route,data){
  const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...selection,...data}):undefined});
@@ -59,12 +60,13 @@ async function refresh(){
  try{
   const result=await api('state?'+q);if(n!==revision)return;
   const first=!state;state=result;selection.project=result.project||null;selection.chat=result.chat||null;
+  const link=new URL(location.href);if(selection.project)link.searchParams.set('project',selection.project);if(selection.chat)link.searchParams.set('chat',selection.chat);history.replaceState(null,'',link);
   if(selectedAgent&&!currentAgent())selectedAgent=null;
   render();if(first)restoreDraft();
  }catch(e){if(n===revision){notice(e.message);$('status').textContent='連線尚未就緒';}}
 }
 function switchAgent(id){historyVisible=false;persistDraft();selectedAgent=id;restoreDraft();render();document.body.classList.remove('show-sidebar');$('draft').focus();}
-async function switchChat(project,chat){historyVisible=false;persistDraft();selection={project,chat};selectedAgent=null;state=null;await refresh();restoreDraft();document.body.classList.remove('show-sidebar');}
+async function switchChat(project,chat){try{persistDraft();await api('select',{project,chat});historyVisible=false;selection={project,chat};selectedAgent=null;state=null;await refresh();restoreDraft();document.body.classList.remove('show-sidebar');}catch(e){notice(e.message);}}
 function renderNav(){
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;
  const nav=$('members');nav.replaceChildren();const query=$('search').value.toLocaleLowerCase().trim();
@@ -78,7 +80,7 @@ function renderNav(){
  for(const project of state?.projects||[]){
   const members=project.id===selection.project?state.agents:(project.agents||[]);
   if(query&&!`${project.name} ${members.map(a=>a.name+' '+providers[a.provider]).join(' ')}`.toLocaleLowerCase().includes(query))continue;
-  const caption=el('button','project-caption',project.name);caption.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id);nav.append(caption);
+  const caption=el('button','project-caption',project.name);caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id);nav.append(caption);
   const current=project.id===selection.project,lead=current?state.terminals.find(t=>t.address===state.control?.terminal):null;
   if(!current)continue;
   const open=async agent=>{if(selection.project!==project.id)await switchChat(project.id,project.chats.at(-1)?.id);switchAgent(agent?.id||null);};
@@ -94,7 +96,7 @@ function render(){
  $('subtitle').textContent=agent?`${agent.group} · ${providers[agent.provider]} · ${agent.level==='manager'?'小組主管':'工作代理'}`:`${state.projects.find(p=>p.id===selection.project)?.name||'專案協作'}`;
  $('recipient').textContent=agent?`交給 ${agent.name}`:'專案協作';
  $('edit-agent').hidden=true;
- $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):agent?`${providers[agent.provider]} · ${status(live)}`:live?`總控 · ${status(live)}`:'隨時可以開始');
+ $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):agent?`${providers[agent.provider]} · ${status(live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+1} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
  const tasks=state.checklist?.items||[],taskStamp=JSON.stringify([selection,state.checklist]);
@@ -200,10 +202,11 @@ document.addEventListener('keydown',e=>{
  }
 });
 compactMode.addEventListener('change',()=>{document.body.classList.remove('show-sidebar','hide-sidebar');});
-function fitDraft(){const input=$('draft');input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
-const oldDraftInput=$('draft').oninput;$('draft').oninput=event=>{oldDraftInput(event);fitDraft();};
+let draftMeasure='';
+function fitDraft(){const input=$('draft'),measure=input.value+'\n'+input.clientWidth;if(measure===draftMeasure)return;draftMeasure=measure;input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
+if('ResizeObserver' in window)new ResizeObserver(()=>fitDraft()).observe($('composer'));
 bindViewport(window,document);
-document.documentElement.dataset.layoutBuild='20261120-edge7';
+document.documentElement.dataset.layoutBuild='20261120-sync8';
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
@@ -223,3 +226,5 @@ $('copy-layout').onclick=async()=>{
  $('layout-diagnostics').textContent=text;$('layout-diagnostics').hidden=false;
  try{await navigator.clipboard.writeText(text);notice('已複製版面診斷，內容只有視窗尺寸，不含對話。');}catch{notice('無法自動複製，可選取下方的版面診斷文字。');}
 };
+
+$('copy-chat-link').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);notice('已複製目前專案與對話連結；在另一台同 Tailnet 裝置開啟即可。');}catch{notice('請複製目前網址，連結已包含專案與對話位置。');}};
