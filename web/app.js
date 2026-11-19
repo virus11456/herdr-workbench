@@ -96,7 +96,8 @@ function render(){
  $('subtitle').textContent=agent?`${agent.group} · ${providers[agent.provider]} · ${agent.level==='manager'?'小組主管':'工作代理'}`:`${state.projects.find(p=>p.id===selection.project)?.name||'專案協作'}`;
  $('recipient').textContent=agent?`交給 ${agent.name}`:'專案協作';
  $('edit-agent').hidden=true;
- $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):agent?`${providers[agent.provider]} · ${status(live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
+ $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):state.startupStopped?'總控啟動已停止，等待你重新開啟':agent?`${providers[agent.provider]} · ${status(live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
+ $('retry-start').hidden=!state.startupStopped;
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+1} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
  const tasks=state.checklist?.items||[],taskStamp=JSON.stringify([selection,state.checklist]);
@@ -206,7 +207,7 @@ let draftMeasure='';
 function fitDraft(){const input=$('draft'),measure=input.value+'\n'+input.clientWidth;if(measure===draftMeasure)return;draftMeasure=measure;input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
 if('ResizeObserver' in window)new ResizeObserver(()=>fitDraft()).observe($('composer'));
 bindViewport(window,document);
-document.documentElement.dataset.layoutBuild='20261120-sync8';
+document.documentElement.dataset.layoutBuild='20261120-startup9';
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
@@ -228,3 +229,5 @@ $('copy-layout').onclick=async()=>{
 };
 
 $('copy-chat-link').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);notice('已複製目前專案與對話連結；在另一台同 Tailnet 裝置開啟即可。');}catch{notice('請複製目前網址，連結已包含專案與對話位置。');}};
+
+$('retry-start').onclick=async()=>{const button=$('retry-start');button.disabled=true;try{await api('retry-start',{});notice('已請求重新開啟總控；登入、信任與權限仍需你親自確認。');await refresh();}catch(error){notice(error.message);}finally{button.disabled=false;}};

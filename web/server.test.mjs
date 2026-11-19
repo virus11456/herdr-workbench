@@ -48,3 +48,14 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  const html=await (await fetch(base+'/',{headers})).text();assert(html.includes('copy-chat-link'));
  assert.equal((await post('/api/project',{name:'x'.repeat(81)})).status,400);
 });
+
+test('startup retry API is scoped, explicit and refuses an active coordinator',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-retry-api-')),home=path.join(root,'app'),folder=path.join(root,'project');fs.mkdirSync(home);fs.mkdirSync(folder);
+ fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Startup fixture',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
+ const c=context(folder,null,null,'unit-chat');fs.mkdirSync(c.teamDir,{recursive:true});const control=path.join(c.teamDir,'control.json');fs.writeFileSync(control,JSON.stringify({terminal:'tunitowner',phase:'active'}));let live=false;
+ const server=createServer({allowedLogin:'owner@example.test',origin:'https://unit.tail.test',appHome:home,core:args=>args[0]==='get'?{address:'tunitowner',state:live?'live':'finished',status:null}:{terminals:[]}});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(root,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port,headers={'Tailscale-User-Login':'owner@example.test'};const state=await (await fetch(base+'/api/state',{headers})).json();assert.equal(state.startupStopped,true);
+ const post=token=>fetch(base+'/api/retry-start',{method:'POST',headers:{...headers,Origin:'https://unit.tail.test','Content-Type':'application/json','X-Herdr-CSRF':token},body:JSON.stringify({project:state.project,chat:state.chat})});
+ assert.equal((await post('wrong')).status,403);const retry=await (await post(state.csrfToken)).json();assert.equal(retry.queued,true);assert.equal(retry.restarted,false);assert.equal(JSON.parse(fs.readFileSync(control)).phase,'retry_requested');
+ live=true;assert.equal((await post(state.csrfToken)).status,400);
+});

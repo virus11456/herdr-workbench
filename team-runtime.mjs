@@ -153,6 +153,16 @@ function conversationContexts(c) {
   if(fs.existsSync(dir)) for(const d of fs.readdirSync(dir,{withFileTypes:true})) if(d.isDirectory()&&validChat(d.name)) list.push({...c,chat:d.name,teamDir:path.join(dir,d.name)});
   return list;
 }
+export async function retryStartup(c) {
+  const file=path.join(teamDir(c),'control.json'),control=read(file);
+  if(!control?.terminal)throw Error('No previous coordinator to reopen.');
+  const terminal=await c.run('hc',['get',control.terminal]);
+  if(terminal.state!=='finished'||terminal.status?.app)throw Error('總控仍在執行或已進入工作階段，請先親自查看原終端。');
+  const current=read(file);
+  if(current?.terminal!==control.terminal)throw Error('總控已變更，請重新整理。');
+  save(file,{...current,phase:'retry_requested'});
+  return {queued:true,restarted:false};
+}
 export function drainChats(c) {
   const dir=path.join(teamDir(c),'chat-queue');
   if(!fs.existsSync(dir)) return {sent:0,pending:0};
@@ -175,6 +185,8 @@ export function drainChats(c) {
     }
     const foreground=t?.foreground?.argv || [];
     const shellWithoutAgent=foreground.length && /(?:^|\/)(?:zsh|bash|sh|fish|nu|pwsh)$/.test(foreground[0]) && !t?.status?.app;
+    // Leaving a startup/trust dialog is not permission to repeatedly reopen it.
+    if(t?.state==='finished'&&!t.status?.app&&control?.phase!=='retry_requested')return{sent:0,pending:files.length,reason:'startup_stopped',blockedTerminal:control.terminal};
     if(!t || t.state==='finished' || (shellWithoutAgent && Date.now()-(control.startedAt||0)>60000)) {
       const argv=[path.join(os.homedir(),'.local/bin/herdr-team-lead')];
       if(c.chat)argv.push('--team-chat',c.chat);

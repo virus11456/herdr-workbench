@@ -8,7 +8,7 @@ import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {context,roster,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName} from '../team-runtime.mjs';
+import {context,roster,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName,retryStartup} from '../team-runtime.mjs';
 const exec=promisify(execFile);
 const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
@@ -72,7 +72,7 @@ export function createServer(config) {
       }catch{coreError='目前無法取得代理終端狀態。';}
     }
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
-    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,coordinatorReady:!!terminals[0]?.status?.app,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,coordinatorReady:!!terminals[0]?.status?.app,startupStopped:terminals[0]?.state==='finished'&&!terminals[0]?.status?.app,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminals.map(t=>({address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,agentId:t.labels?.['team.agent']||null})),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
@@ -113,6 +113,7 @@ export function createServer(config) {
           rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/retry-start'){json(200,await retryStartup({...c,run:(_cmd,args)=>core(args)}));return;}
         if(route==='/api/select'){rememberSelection(p,chat);json(200,{project:p.id,chat});return;}
         if(route==='/api/coordinator'){json(200,setCoordinatorName(c,data.name));return;}
         if(route==='/api/message'){

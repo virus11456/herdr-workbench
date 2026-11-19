@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
-import {context,saveRoster,roster,enqueueChat,drainChats,setCoordinatorName,coordinatorProfile,captureReply} from './team-runtime.mjs';
+import {context,saveRoster,roster,enqueueChat,drainChats,setCoordinatorName,coordinatorProfile,captureReply,retryStartup} from './team-runtime.mjs';
 import {deploymentPlan,applyDeployment,mergeProjects} from './setup.mjs';
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'workbench-headless-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const project=path.join(root,"project space's");fs.mkdirSync(project);return{root,project};}
 test('Drive project files and private runtime state remain separate, with project-scoped names and rosters',t=>{
@@ -63,4 +63,13 @@ test('queued tasks use the latest project roster at delivery, and never silently
  fs.rmSync(path.join(c.teamBase,'chat-delivery.json'));
  enqueueChat(c,'@engineer Unit fixture for an explicitly selected role');saveRoster(c,[]);
  assert.equal(drainChats(c).sent,0);assert.equal(calls.filter(a=>a[0]==='send').length,1);assert.equal(fs.readdirSync(path.join(c.teamDir,'chat-queue')).filter(n=>n.endsWith('.json')).length,1);
+});
+
+test('startup exit does not auto-reopen permission prompts; reopening requires an explicit request',async t=>{
+ const {root,project}=fixture(t);let starts=0,finished=true;
+ const c=context(project,null,(cmd,args)=>{assert.equal(cmd,'hc');if(args[0]==='get')return{address:'tunitold',state:finished?'finished':'live',status:null};if(args[0]==='run'){starts++;return{address:'tunitnew'};}throw Error(args.join(' '));},'unit-chat',{headless:true,stateRoot:path.join(root,'private')});
+ enqueueChat(c,'Unit startup fixture; no real agents');fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitold',role:'claude',phase:'active',startedAt:Date.now()}));
+ for(let i=0;i<3;i++)assert.equal(drainChats(c).reason,'startup_stopped');assert.equal(starts,0);
+ finished=false;await assert.rejects(()=>retryStartup(c),/仍在執行/);finished=true;
+ assert.equal((await retryStartup(c)).queued,true);assert.equal(drainChats(c).reason,'starting');assert.equal(starts,1);
 });

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261120-sync8"><script src="./app.js?v=20261120-sync8" type="module"></script></head>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261120-startup9"><script src="./app.js?v=20261120-startup9" type="module"></script></head>
 <body>
 <div id="app">
  <button id="sidebar-backdrop" aria-label="關閉專案側欄" tabindex="-1"></button>
@@ -11,7 +11,7 @@
  </aside>
  <main>
   <header><button id="sidebar-toggle" class="icon-button" aria-label="收合或展開側欄">☰</button><div class="heading"><h1 id="title">協作總控</h1><p id="subtitle">Claude · Codex · MiniMax</p></div><button id="edit-agent" hidden>角色設定</button><button id="quick-new-chat" class="icon-button" aria-label="新增對話">＋</button></header>
-  <div class="statusbar"><span id="status">正在連線到 Mac mini…</span><span id="counts"></span></div>
+  <div class="statusbar"><span id="status">正在連線到 Mac mini…</span><button id="retry-start" type="button" hidden>重新開啟總控</button><span id="counts"></span></div>
   <section id="feed" aria-label="對話訊息" tabindex="0">
    <div id="welcome"><div id="hero-sheep" aria-hidden="true"></div><h2>你的團隊，<br>準備一起工作。</h2><p id="welcome-description">我們是牧羊人。為每個專案加入夥伴，依目標自由協作。</p><div id="suggestions"></div><div class="workflow"><span>專案與目標由你決定，成員與分工隨任務調整。</span></div></div>
    <details id="task-checklist" hidden><summary id="task-summary">任務清單</summary><div id="task-items"></div></details>
