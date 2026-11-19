@@ -1,3 +1,4 @@
+import {checklist,updateChecklist} from './checklist.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -40,6 +41,7 @@ export function teamBrief(c) {
     '總控依這個專案的實際需求協調已加入的代理，可以直接處理、依序處理或平行協作，不強制規劃→開發→審查。主管與成員皆可提出協作請求，依所設職責拆解、追蹤與驗收。所有啟動、傳訊、暫停和交接仍由目前總控核對範圍後執行。'+
     '主管或工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 要求另一位代理協助，總控必須接收並回覆處理結果；代理不能自行繞過總控、權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
+    '多步或多代理任務先用 herdr-team-runtime checklist 讀共用清單，再用 request checklist 更新並讀取同 ID response。每項記錄 id/title/owner/status/acceptance/revision；驗收後才標記 done，附 verification 與 evidence（檔案相對路徑及 SHA-256，或同 ID 成功 read response.result 的 JSON SHA-256）。不要以 queued 或代理自稱完成作為驗收。清單依對話保存，接手先續讀，不刪掉未完成項。'+
     '派工時清楚提供任務、工作範圍、產物、驗收、總控回報命令及不得自行啟動其他代理。多位寫入者必須使用獨立 worktree，否則依序寫入。不得自動付費、答覆信任或權限提示。';
 }
 export function routeMessage(text, agents = []) {
@@ -275,6 +277,7 @@ export function executeRequest(c, req) {
   const control = read(path.join(teamDir(c), 'control.json'));
   if (!control?.terminal || req.sender !== control.terminal) throw new Error('Only the active coordinator may request operations.');
   const a = req.args || {};
+  if(req.action==='checklist'){const result=updateChecklist(c,a,req.sender);const item=result.items.find(i=>i.id===a.id);log(c,'總控',`任務清單：${result.items.filter(i=>i.status==='done').length}/${result.items.length} 已核對完成 · ${item.title} · ${{pending:'待處理',in_progress:'進行中',blocked:'等待處理',done:'已核對完成'}[item.status]}`,'checklist');return result;}
   if (req.action === 'templates') return c.run('hc', ['templates']);
   if (req.action === 'list') {
     const all = c.run('hc', ['ls', '--json']);
@@ -419,7 +422,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if(argv[0]==='--chat') {const id=argv[1];if(!id||!validChat(id))throw new Error('Invalid conversation ID.');process.env.HERDR_TEAM_CHAT_ID=id;argv.splice(0,2);}
     const [cmd, ...args] = argv;
     let result;
-    if (['help', '--help', '-h'].includes(cmd)) result = { usage: 'herdr-team-runtime register claude|codex; report <coordinator-id> <role> <summary>; request <action> <json>; response <id>; log <role> <summary>; drain; takeover <project>' };
+    if (['help', '--help', '-h'].includes(cmd)) result = { usage: 'herdr-team-runtime register claude|codex; report <coordinator-id> <role> <summary>; checklist; request <action> <json>; response <id>; log <role> <summary>; drain; takeover <project>' };
     else if (cmd === 'hook') {
       const event = JSON.parse(fs.readFileSync(0, 'utf8'));
       result = handleFailure(event, context(event.cwd || process.cwd()));
@@ -431,6 +434,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       result = captureReply(event, context(event.cwd || process.cwd()), 'Codex');
     } else if (cmd === 'model-id') { process.stdout.write(selectedModel(context()) + '\n'); result = null; }
     else if (cmd === 'switch-model') result = await switchModel(context(), args[0]);
+    else if (cmd === 'checklist') result = checklist(context());
     else if (cmd === 'coordinator') result = args[0]==='set' ? setCoordinatorName(context(),args[1]) : coordinatorProfile(context());
     else if (cmd === 'roster') result = args[0]==='set' ? saveRoster(context(),JSON.parse(args[1]||'null')) : {agents:roster(context())};
     else if (cmd === 'route') result = routeMessage(args[0] || '',roster(context()));

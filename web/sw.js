@@ -1,4 +1,4 @@
-const CACHE='herdr-shell-v3';
+const CACHE='herdr-shell-v4';
 const base=new URL('./',self.location.href);
 const shell=['./','./style.css','./app.js','./format.mjs','./sheep.svg','./shepherd.svg','./app-icon.svg','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./manifest.webmanifest'];
 const allowed=new Set(shell.map(p=>new URL(p,base).href));

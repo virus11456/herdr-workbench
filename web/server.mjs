@@ -1,3 +1,4 @@
+import {checklist} from '../checklist.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -61,7 +62,7 @@ export function createServer(config) {
       }catch{coreError='目前無法取得代理終端狀態。';}
     }
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
-    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminals.map(t=>({address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,agentId:t.labels?.['team.agent']||null})),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};

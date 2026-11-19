@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {context,executeRequest} from './team-runtime.mjs';
+import {checklist} from './checklist.mjs';
+const hash=s=>createHash('sha256').update(s).digest('hex');
+test('shared checklist enforces ownership, revision, scoped evidence and persistence',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-checklist-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const project=path.join(root,'project');fs.mkdirSync(project);const c=context(project,null,()=>{throw Error('No real agent calls allowed');},'unit-chat');fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunit'}));
+ const send=args=>executeRequest(c,{action:'checklist',sender:'tunit',args});
+ const task={id:'review',revision:0,title:'核對計算',owner:'審查代理',acceptance:'結果等於 55',status:'in_progress'};
+ assert.throws(()=>executeRequest(c,{action:'checklist',sender:'tother',args:task}),/Only the active/);
+ assert.equal(send(task).revision,1);assert.throws(()=>send(task),/changed/);
+ const done={...task,revision:1,status:'done',verification:'總控確認結果等於 55'};
+ assert.throws(()=>send(done),/requires evidence/);
+ fs.writeFileSync(path.join(project,'answer.txt'),'55');
+ assert.throws(()=>send({...done,evidence:[{type:'file',path:'answer.txt',sha256:hash('54')}]}),/does not match/);
+ fs.writeFileSync(path.join(root,'outside.txt'),'55');fs.symlinkSync(path.join(root,'outside.txt'),path.join(project,'escape.txt'));
+ assert.throws(()=>send({...done,evidence:[{type:'file',path:'escape.txt',sha256:hash('55')}]}),/inside the project/);
+ assert.equal(send({...done,evidence:[{type:'file',path:'answer.txt',sha256:hash('55')}]}).items[0].status,'done');
+ assert.equal(checklist(context(project,null,null,'unit-chat')).revision,2);
+ assert.equal(checklist(context(project,null,null,'other-chat')).items.length,0);
+});
+test('queued, failed and unrelated request responses cannot prove completion',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-response-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const c=context(root,null,()=>{throw Error('No real agents');});fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),'{"terminal":"tunit"}');
+ const id='11111111-1111-1111-1111-111111111111',result={text:'55'},task={revision:0,id:'verify',title:'核對',owner:'總控',status:'done',acceptance:'55',verification:'已讀終端並核對',evidence:[{type:'response',id,sha256:hash(JSON.stringify(result))}]};
+ const send=()=>executeRequest(c,{action:'checklist',sender:'tunit',args:task});assert.throws(send,/completed terminal read/);
+ for(const dir of ['requests','responses'])fs.mkdirSync(path.join(c.teamDir,dir),{recursive:true});
+ const request=path.join(c.teamDir,'requests',id+'.json.done'),response=path.join(c.teamDir,'responses',id+'.json');
+ fs.writeFileSync(request,JSON.stringify({id,action:'run'}));fs.writeFileSync(response,JSON.stringify({ok:true,result}));assert.throws(send,/completed terminal read/);
+ fs.writeFileSync(request,JSON.stringify({id,action:'read'}));fs.writeFileSync(response,JSON.stringify({ok:false,result}));assert.throws(send,/completed terminal read/);
+ fs.writeFileSync(response,JSON.stringify({ok:true,result}));assert.equal(send().items[0].status,'done');
+});

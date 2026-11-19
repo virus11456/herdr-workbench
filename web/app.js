@@ -5,7 +5,7 @@ const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax'};
 const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-height:520px)');
 let state=null,selection={project:null,chat:null},selectedAgent=null,details=false,historyVisible=false,editing=null,posting=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
-let sheepSource=null,navSnapshot='',messageSnapshot='';
+let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='';
 function hydrateSheep(wrap){
  if(!sheepSource)return;
  const svg=sheepSource.cloneNode(true);svg.classList.add('sheep-character');svg.setAttribute('aria-hidden','true');wrap.replaceChildren(svg);
@@ -96,6 +96,15 @@ function render(){
  $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):agent?`${providers[agent.provider]} · ${status(live)}`:live?`總控 · ${status(live)}`:'隨時可以開始');
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+1} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
+ const tasks=state.checklist?.items||[],taskStamp=JSON.stringify([selection,state.checklist]);
+ $('task-checklist').hidden=historyVisible||!tasks.length;
+ if(taskStamp!==checklistSnapshot){checklistSnapshot=taskStamp;$('task-summary').textContent=`任務清單 · ${tasks.filter(t=>t.status==='done').length}/${tasks.length} 已核對完成`;
+  $('task-items').replaceChildren();for(const task of tasks){const row=el('div','task-item'),labels={pending:'待處理',in_progress:'進行中',blocked:'等待處理',done:'已核對完成'};
+   row.append(el('strong','',task.title),el('p','',`${task.owner} · ${labels[task.status]||task.status}`),el('p','','驗收：'+task.acceptance));
+   if(task.reason)row.append(el('p','','待處理：'+task.reason));if(task.verification)row.append(el('p','','核對：'+task.verification));
+   for(const proof of task.evidence||[])row.append(el('code','',`${proof.path||'終端讀取紀錄'} · SHA-256 ${proof.sha256}`));$('task-items').append(row);
+  }
+ }
  const all=state.messages||[],deliveries={};for(const e of all)if(e.kind==='delivery')deliveries[e.messageId]=e.delivery;
  const messages=all.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment')&&(details||!agent||m.role===agent.name||m.agentId===agent.id||m.target===agent.id||(live&&m.terminal===live.address)));
  $('welcome').hidden=historyVisible||messages.length>0;$('messages').hidden=historyVisible;$('history-panel').hidden=!historyVisible;document.querySelector('.compose-wrap').hidden=historyVisible;

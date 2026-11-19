@@ -110,3 +110,13 @@ node --test team-runtime.test.mjs background.test.mjs web/server.test.mjs web/fo
 ## 發佈範圍
 
 只收錄程式、圖示、範本、測試與文件。不得提交 `service.json`、`web/config.json`、專案清單、對話、`.herdr-team/`、token、API key、Cookie、私人金鑰、安裝備份或本機測試成果。
+
+## 多代理共用任務清單
+
+多步驟任務由總控先列出工作、負責代理及驗收條件。聊天內顯示「任務清單 · 完成數／總數」，可展開查看內容；不另開協作紀錄頁。未完成項目會保留，接手總控先讀清單，避免漏做或重複派工。
+
+總控先執行 `herdr-team-runtime checklist` 取得 revision，再以 `request checklist` 提交單一項目，讀取同 ID 的 response 確認成功。每個項目都有 `id`、`title`、`owner`、`acceptance`、`status` 和目前 `revision`。狀態為 pending、in_progress、blocked 或 done；blocked 必須寫 reason。
+
+只有目前總控能更新；版本不符會拒絕寫入。done 必須提供總控的 `verification` 驗收說明，以及 `evidence`：專案內檔案的相對路徑與 SHA-256（type=file），或已成功完成的終端 read 請求 ID 和 response.result JSON 的 SHA-256（type=response）。系統核對來源、完成狀態及雜湊，語意是否符合驗收條件仍由總控負責。queued、啟動成功或代理自稱完成，都不能單獨標記 done。此機制不額外賦予代理檔案或終端權限。
+
+既有執行中的總控會在下一次收到任務時取得新版協作提示；不會為更新自動送出任務。

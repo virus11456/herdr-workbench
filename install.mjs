@@ -49,6 +49,7 @@ try {
     ...['activity','arrow-up','book','chat','check','close','code','compass','edit','folder','plus','search','sidebar','spark','terminal','sheep','sheep-body','sheep-head','sheep-eyes','shepherd'].map(name => [`mods/team-chat/icons/${name}.svg`, path.join(app, `mods/team-chat/icons/${name}.svg`)]),
     ['layouts/team-work.json', path.join(app, 'layouts/team-work.json')],
     ['team-runtime.mjs', path.join(app, 'team-runtime.mjs')],
+    ['checklist.mjs', path.join(app, 'checklist.mjs')],
     ...['lead', 'backup', 'claude', 'runtime'].map(name => [`bin/herdr-team-${name}`, path.join(bin, `herdr-team-${name}`)]),
     ...['herdr-claude-task', 'herdr-codex-implement', 'herdr-minimax-cn'].map(name => [`templates/${name}.md`, path.join(core, `templates/${name}.md`)])
   ].map(([source, target]) => {

@@ -26,7 +26,7 @@ export function deploymentPlan(input,tools){
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['team-runtime.mjs','background.mjs','storage.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['team-runtime.mjs','background.mjs','storage.mjs','checklist.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const replacements={'@NODE_SHELL@':quote(tools.node),'@NOTIFY_CONFIG@':quote('notify='+JSON.stringify([tools.node,path.join(home,'team-runtime.mjs'),'codex-notify']))};
  for(const name of ['runtime','lead','backup','claude','codex','minimax']){
   let text=fs.readFileSync(path.join(source,'bin/herdr-team-'+name),'utf8');
