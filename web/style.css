@@ -102,3 +102,14 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 #task-checklist summary{min-height:44px;display:list-item;align-content:center;cursor:pointer;font-size:14px}
 .task-item{border-top:1px solid #414346;padding:12px 0;overflow-wrap:anywhere}.task-item p{margin:6px 0;font-size:14px}.task-item code{display:block;font-size:12px;overflow-wrap:anywhere}
 #task-checklist summary:active{opacity:.7}
+
+/* Keep phone controls away from system edge effects without growing the app. */
+@media(max-width:767px), (max-width:1023px) and (max-height:520px){
+ .compose-wrap{padding-bottom:24px}
+}
+@supports (-webkit-touch-callout:none){
+ @media (display-mode:standalone) and (max-width:767px) and (orientation:portrait){
+  main{padding-top:80px}
+  header{position:fixed;top:var(--keyboard-top,0px);left:0;right:0;z-index:2;height:80px;padding:24px 12px 0;background:var(--bg)}
+ }
+}

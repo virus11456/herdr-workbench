@@ -203,7 +203,7 @@ compactMode.addEventListener('change',()=>{document.body.classList.remove('show-
 function fitDraft(){const input=$('draft');input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
 const oldDraftInput=$('draft').oninput;$('draft').oninput=event=>{oldDraftInput(event);fitDraft();};
 bindViewport(window,document);
-document.documentElement.dataset.layoutBuild='20261120-contained6';
+document.documentElement.dataset.layoutBuild='20261120-edge7';
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
