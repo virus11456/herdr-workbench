@@ -39,7 +39,7 @@ export function deploymentPlan(input,tools){
  for(const [name,marker,command]of [['herdr-claude-task','@CLAUDE_COMMAND@','herdr-team-claude'],['herdr-codex-implement','@CODEX_COMMAND@','herdr-team-codex'],['herdr-minimax-cn','@MINIMAX_COMMAND@','herdr-team-minimax']]){
   add(path.join(core,'templates',name+'.md'),fs.readFileSync(path.join(source,'templates',name+'.md'),'utf8').replaceAll(marker,quote(path.join(bin,command))));
  }
- for(const name of ['server.mjs','index.html','app.js','style.css','format.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
+ for(const name of ['server.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
  add(path.join(home,'team-claude-settings.json'),JSON.stringify(hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),null,2)+'\n');
  add(path.join(home,'service.json'),JSON.stringify(config,null,2)+'\n');add(path.join(home,'web/config.json'),JSON.stringify(config,null,2)+'\n');
  if(input.projects)add(path.join(home,'web/projects.json'),JSON.stringify(input.projects,null,2)+'\n');

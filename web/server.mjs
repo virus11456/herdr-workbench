@@ -124,7 +124,7 @@ export function createServer(config) {
         }
         throw failure('找不到操作。',404);
       }
-      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
+      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/viewport.mjs','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
         if(url.pathname==='/herdr'){res.writeHead(302,{Location:'/herdr/'});res.end();return;}
         const name=route==='/'?'index.html':route.slice(1);res.writeHead(200,{'Content-Type':contentTypes[path.extname(name)]});res.end(fs.readFileSync(path.join(root,name)));return;
       }

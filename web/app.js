@@ -1,3 +1,4 @@
+import {bindViewport} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
@@ -201,16 +202,8 @@ document.addEventListener('keydown',e=>{
 compactMode.addEventListener('change',()=>{document.body.classList.remove('show-sidebar','hide-sidebar');});
 function fitDraft(){const input=$('draft');input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
 const oldDraftInput=$('draft').oninput;$('draft').oninput=event=>{oldDraftInput(event);fitDraft();};
-function syncViewport(){
- const view=window.visualViewport;
- const height=view&&view.scale===1&&['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)?Math.min(innerHeight,view.height):innerHeight;
- document.documentElement.style.setProperty('--app-height',height+'px');
-}
-window.addEventListener('pageshow',syncViewport,{passive:true});
-window.addEventListener('orientationchange',syncViewport,{passive:true});
-
-$('draft').addEventListener('focus',syncViewport);$('draft').addEventListener('blur',syncViewport);
-window.addEventListener('resize',syncViewport,{passive:true});window.visualViewport?.addEventListener('resize',syncViewport,{passive:true});syncViewport();
+bindViewport(window,document);
+document.documentElement.dataset.layoutBuild='20261120-viewport5';
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
