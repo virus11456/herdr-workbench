@@ -1,3 +1,4 @@
+import {projectMemoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
 import {roster,log} from './team-runtime.mjs';
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -196,11 +197,11 @@ function sendDirect(c){
   if(!['idle','done'].includes(t.status?.state)||!t.status?.app){blocked={sent:0,reason:'agent_not_ready',terminal:id};continue;}
   if(bindings[id].activeJob){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
   const lease=read(path.join(c.teamDir,'direct-delivery.json'));if(lease?.terminal===id&&bindings[id].awaitingReply!==false&&Date.now()-lease.time<10000){blocked={sent:0,reason:'delivery_settling'};continue;}
-  const prompt=`你是 ${agent.name}，這是使用者直接與你的對話，不經固定總控轉交。職責：${agent.brief}。只處理授權範圍。${collaborationPrompt(c,agent.id)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
+  const prompt=`你是 ${agent.name}，這是使用者直接與你的對話，不經固定總控轉交。職責：${agent.brief}。只處理授權範圍。${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
   bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
   if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
 
-  c.run('hc',['send',id,prompt]);bindings[id].delivered=true;save(file,bindings);save(path.join(c.teamDir,'direct-delivery.json'),{terminal:id,time:Date.now()});fs.renameSync(path.join(dir,item.name),path.join(dir,item.name+'.sent'));log(c,'系統','訊息已直接送到 '+agent.name+'。','delivery',{messageId:item.id,delivery:'sent',target:agent.id,direct:true});return{sent:1,terminal:id};
+  c.run('hc',['send',id,prompt]);bindings[id].delivered=true;save(file,bindings);save(path.join(c.teamDir,'direct-delivery.json'),{terminal:id,time:Date.now()});fs.renameSync(path.join(dir,item.name),path.join(dir,item.name+'.sent'));log(c,'系統','訊息已直接送到 '+agent.name+'。','delivery',{messageId:item.id,delivery:'sent',target:agent.id,direct:true,provider:agent.provider});return{sent:1,terminal:id};
   }
   return blocked||{sent:0};
  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}

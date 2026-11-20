@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-chat27';
+const UI_BUILD='20261120-work28';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -66,7 +66,12 @@ function renderReplyProgress(){
 const draftKey=()=>`herdr-draft:${selection.project}:${selection.chat}:${selectedAgent||'team'}`;
 function persistDraft(){try{localStorage.setItem(draftKey(),$('draft').value);}catch{}}
 function restoreDraft(){try{$('draft').value=localStorage.getItem(draftKey())||'';}catch{$('draft').value='';}updateSend();}
-function updateSend(){$('send').disabled=posting||!state?.project||state?.projectAvailable===false||!$('draft').value.trim();fitDraft();}
+function updateSend(){
+ $('send').disabled=posting||!state?.project||state?.projectAvailable===false||!$('draft').value.trim();
+ $('collaboration-picker').hidden=!state?.agents.some(agent=>agent.id!==selectedAgent);
+ $('collaboration-picker').disabled=posting||state?.projectAvailable===false;
+ fitDraft();
+}
 function notice(text){$('notice').textContent=text;}
 async function api(route,data){
  const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...selection,...data}):undefined});
@@ -133,6 +138,59 @@ function renderAttention(){
  if(key===attentionSnapshot)return;attentionSnapshot=key;$('attention-items').replaceChildren();
  for(const a of items){const row=el('div','attention-item');row.append(el('strong','',a.name),el('p','',a.detail));const action=el('button','','查看處理方式');action.type='button';action.onclick=()=>{switchAgent(a.agentId,false);$('permission-agent').textContent=a.name;$('permission-terminal').textContent=a.id;$('permission-command').textContent='~/.local/bin/hc attach '+a.id;$('permission-dialog').showModal();};row.append(action);$('attention-items').append(row);}
 }
+function prepareTaskDraft(task){
+ if(posting)return;
+ if(task.agentId&&!state.agents.some(agent=>agent.id===task.agentId)){
+  notice('原代理已不在此專案，請先選擇接手的代理。');
+  return;
+ }
+ if(selectedAgent!==task.agentId)switchAgent(task.agentId,false);
+ const input=$('draft');
+ if(input.value.trim()){
+  notice('這段對話已有草稿，請先處理草稿再載入任務。');
+  input.focus();
+  return;
+ }
+ const key=draftKey()+':pending';
+ try{
+  const pending=JSON.parse(localStorage.getItem(key)||'null');
+  if(pending?.id===task.id.slice('message:'.length))localStorage.removeItem(key);
+  else if(pending){
+   notice('上一筆送出結果尚未確認，請先查看對話狀態。');
+   return;
+  }
+ }catch{}
+ const prompt='請接續以下中斷的任務。先檢查目前已完成的內容和檔案，再繼續未完成的部分。\n\n';
+ input.value=task.phase==='stopped'?prompt+task.title:task.title;
+ persistDraft();updateSend();input.focus();
+ notice(input.value.length>12000?'已載入草稿。送出前請把內容縮短到 12000 字。':'已載入草稿，編輯好再送出。');
+}
+let artifactRequest=0;
+async function openArtifact(task,artifact){
+ const token=++artifactRequest;
+ const query=new URLSearchParams({...selection,kind:task.kind,id:task.id.slice(task.id.indexOf(':')+1),index:artifact.index});
+ const url=mode=>'./api/artifact?'+query+'&mode='+mode;
+ const dialog=$('artifact-dialog'),image=$('artifact-image'),text=$('artifact-text'),download=$('artifact-download');
+ $('artifact-title').textContent=artifact.name;
+ $('artifact-status').textContent='正在核對驗收檔案…';
+ image.hidden=text.hidden=download.hidden=true;
+ image.removeAttribute('src');text.textContent='';
+ dialog.showModal();
+ try{
+  const result=await api(url('preview').slice('./api/'.length));
+  if(token!==artifactRequest||!dialog.open)return;
+  if(result.kind==='image'){
+   image.onerror=()=>{if(token===artifactRequest){image.hidden=true;$('artifact-status').textContent='無法顯示圖片，檔案可能已變更。';}};
+   image.alt=result.name;image.src=url('image');image.hidden=false;
+  }else if(result.kind==='text'){
+   text.textContent=result.text;text.hidden=false;
+  }
+  download.href=url('download');download.hidden=false;
+  $('artifact-status').textContent=result.truncated?'顯示前 256 KB，完整內容請下載。':result.kind==='download'?'這個格式可下載查看。':'';
+ }catch(error){if(token===artifactRequest&&dialog.open)$('artifact-status').textContent=error.message;}
+}
+$('artifact-close').onclick=()=>$('artifact-dialog').close();
+$('artifact-dialog').addEventListener('close',()=>{artifactRequest++;$('artifact-image').removeAttribute('src');});
 function renderTasks(){
  const tasks=taskCards(state,selectedAgent),totals=taskSummary(tasks),key=JSON.stringify([selection,selectedAgent,tasks]);$('task-checklist').hidden=historyVisible||!tasks.length;
  $('task-summary').textContent='任務進度'+(totals.attention?' · '+totals.attention+' 等待處理':totals.active?' · '+totals.active+' 進行中':totals.review?' · '+totals.review+' 待驗收':' · '+totals.verified+' 已驗收');
@@ -141,7 +199,19 @@ function renderTasks(){
  for(const task of tasks.sort((a,b)=>rank[a.phase]-rank[b.phase])){const row=el('details','progress-card');row.dataset.id=task.id;row.dataset.phase=task.phase;row.open=open.has(task.id);const summary=el('summary'),title=el('span','task-title',task.title.slice(0,140)),badge=el('span','task-badge',taskLabels[task.phase]);summary.append(title,badge);row.append(summary,el('p','task-owner',(task.source?task.source+' → ':'')+task.owner));
   if(task.acceptance)row.append(el('p','','驗收條件：'+task.acceptance));if(task.verification)row.append(el('p','','驗收結果：'+task.verification));if(task.detail)row.append(el('p','',task.detail));
   if(task.phase==='review')row.append(el('p','','代理已回報，等待交付者核對；尚未驗收完成。'));
-  if(task.kind!=='checklist'){const b=el('button','','前往代理對話');b.type='button';b.onclick=()=>switchAgent(task.agentId||null,false);row.append(b);}if(task.action){
+  for(const artifact of task.artifacts||[]){
+   const button=el('button','artifact-button',artifact.name);
+   button.type='button';button.setAttribute('aria-label','查看成果 '+artifact.name);
+   button.onclick=()=>openArtifact(task,artifact);row.append(button);
+  }
+  if(task.canPrepareDraft){
+   const button=el('button','',task.phase==='cancelled'?'重新編輯':'準備接續');
+   button.type='button';button.onclick=()=>prepareTaskDraft(task);row.append(button);
+  }else if(task.kind!=='checklist'){
+   const button=el('button','','前往代理對話');
+   button.type='button';button.onclick=()=>switchAgent(task.agentId||null,false);row.append(button);
+  }
+  if(task.action){
    const button=el('button','task-action',task.action==='cancel'?'取消排隊':'停止執行');
    button.type='button';button.onclick=async()=>{
     if(task.action==='stop'&&!confirm('停止「'+task.owner+'」正在執行的這一回合？已寫入的檔案會保留。'))return;
@@ -192,8 +262,59 @@ function render(){
 }
 const suggestions=[['釐清目標','先一起想清楚要做什麼','請先協助我釐清這個專案的目標與限制：'],['開始協作','依任務安排適合的成員','請依這個專案已加入的代理與職責，協助以下目標：'],['核對成果','需要時再安排交叉檢查','請檢查以下成果，依需要安排已加入的代理交叉驗證：'],['整理資訊','把零散內容整理清楚','請協助整理以下內容，保留重點、待辦與需要確認的問題：']];
 for(const [title,sub,prompt]of suggestions){const b=el('button','suggestion');b.type='button';b.append(el('strong','',title),el('small','',sub));b.onclick=()=>{$('draft').value=prompt;persistDraft();updateSend();$('draft').focus();};$('suggestions').append(b);}
-$('draft').oninput=()=>{persistDraft();updateSend();};
-$('draft').onkeydown=e=>{if(compactMode.matches)return;if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('composer').requestSubmit();}};
+const mentionBox=$('mention-suggestions');
+function renderMentionSuggestions(){
+ mentionBox.replaceChildren();mentionBox.hidden=true;
+ const query=$('draft').value.match(/^@([^\n\s：:，,]*)$/)?.[1]?.toLocaleLowerCase();
+ if(query===undefined||posting)return;
+ for(const agent of (state?.agents||[]).filter(a=>[a.name,a.id].some(value=>value.toLocaleLowerCase().includes(query))).slice(0,8)){
+  const button=el('button','',agent.name+' · '+providerName(agent.provider));
+  button.type='button';button.onclick=()=>{
+   if(!state.agents.some(a=>a.id===agent.id)){notice('代理名單已更新，請重新選擇。');return;}
+   $('draft').value='@'+agent.id+' ';
+   mentionBox.hidden=true;persistDraft();updateSend();$('draft').focus();
+  };mentionBox.append(button);
+ }
+ mentionBox.hidden=!mentionBox.childElementCount;
+}
+$('draft').oninput=()=>{persistDraft();updateSend();renderMentionSuggestions();};
+$('draft').onkeydown=e=>{
+ if(e.key==='Escape'){mentionBox.hidden=true;return;}
+ if(!mentionBox.hidden&&e.key==='ArrowDown'){e.preventDefault();mentionBox.querySelector('button')?.focus();return;}
+ if(compactMode.matches)return;
+ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){
+  e.preventDefault();
+  if(!mentionBox.hidden)mentionBox.querySelector('button')?.focus();
+  else $('composer').requestSubmit();
+ }
+};
+mentionBox.onkeydown=event=>{
+ if(event.key==='Escape'){mentionBox.hidden=true;$('draft').focus();}
+};
+document.addEventListener('focusin',event=>{if(event.target!==$('draft')&&!mentionBox.contains(event.target))mentionBox.hidden=true;});
+$('collaboration-picker').onclick=()=>{
+ if(posting)return;
+ const list=$('collaboration-members');list.replaceChildren();
+ for(const agent of state.agents.filter(a=>a.id!==selectedAgent)){
+  const label=el('label'),box=el('input');box.type='checkbox';box.value=agent.id;
+  label.append(box,el('span','',agent.name+' · '+providerName(agent.provider)));list.append(label);
+ }
+ $('collaboration-add').disabled=true;$('collaboration-notice').textContent='';
+ $('collaboration-dialog').showModal();
+};
+$('collaboration-members').onchange=()=>{$('collaboration-add').disabled=!$('collaboration-members').querySelector('input:checked');};
+$('collaboration-close').onclick=()=>$('collaboration-dialog').close();
+$('collaboration-form').onsubmit=event=>{
+ event.preventDefault();if(posting)return;
+ const ids=[...$('collaboration-members').querySelectorAll('input:checked')].map(box=>box.value);
+ const agents=state.agents.filter(a=>ids.includes(a.id)&&a.id!==selectedAgent);
+ if(!agents.length||agents.length!==ids.length){$('collaboration-notice').textContent='代理名單已更新，請關閉後重新選擇。';return;}
+ const draft=$('draft');
+ if(draft.value.trimStart().startsWith('@')){$('collaboration-notice').textContent='草稿已有 @ 收件者。請先確認收件者，再加入協作名單。';return;}
+ const collaborators=agents.map(a=>a.name+'（'+a.id+'）').join('、');
+ draft.value='請與以下專案代理協作：'+collaborators+'。\n\n'+draft.value;
+ persistDraft();updateSend();$('collaboration-dialog').close();draft.focus();
+};
 $('composer').onsubmit=async e=>{
  e.preventDefault();if(posting||!$('draft').value.trim()||!state?.project)return;
  const original=$('draft').value,a=currentAgent(),text=original;
@@ -265,7 +386,45 @@ $('remove-project-category').onclick=()=>{
  const category=state?.projects.find(p=>p.id===selection.project)?.category;
  if(category&&confirm('刪除「'+category+'」分類？此分類的所有專案都會移至未分類。'))changeCategory('remove',category);
 };
-function openTeam(){renderProjectCategory();$('project-category-result').textContent=''; $('project-rename').value=state?.projects.find(p=>p.id===selection.project)?.name||'';
+let memoryRevision=0;
+function renderUsage(){
+ const list=$('conversation-usage');list.replaceChildren();
+ if(!state?.usage?.length){
+  list.append(el('dt','','這段對話還沒有可統計的送達紀錄。'));return;
+ }
+ for(const {provider,delivered,replies} of state.usage){
+  list.append(el('dt','',providers[provider]||'未標記引擎'),el('dd','',delivered+' 次送達 · '+replies+' 次回覆'));
+ }
+}
+$('conversation-usage-section').addEventListener('toggle',event=>{if(event.currentTarget.open)renderUsage();});
+$('maintenance-draft').onclick=()=>{
+ if(posting)return;
+ const issue=$('maintenance-issue').value.trim();
+ if(!issue){$('maintenance-result').textContent='請先填寫要修正的問題。';$('maintenance-issue').focus();return;}
+ if($('draft').value.trim()){$('maintenance-result').textContent='這段對話已有草稿，請先處理草稿。';return;}
+ $('draft').value='維護工作：'+issue+'\n\n請先說明重現方式和修改範圍。若此專案有可寫的 Git 工作區，請在獨立 worktree 做最小修正，並附上變更摘要、測試結果以及可供審閱的檔案或 diff。請停在等待我核准的階段，等我確認後才合併、部署或發布。';
+ persistDraft();updateSend();$('team-dialog').close();$('draft').focus();
+};
+$('project-memory-form').onsubmit=async event=>{
+ event.preventDefault();const button=event.submitter;button.disabled=true;
+ try{
+  const result=await api('project-memory',{revision:memoryRevision,text:$('project-memory').value});
+  memoryRevision=result.revision;
+  $('project-memory-result').textContent=result.text?'已保存，後續任務會讀取此記憶。':'已清空專案記憶。';
+  await refresh();
+ }catch(error){$('project-memory-result').textContent=error.message;}
+ finally{button.disabled=false;}
+};
+function openTeam(){
+ renderProjectCategory();
+ renderUsage();
+ $('maintenance-section').hidden=!state?.project;
+ $('maintenance-issue').value='';$('maintenance-result').textContent='';
+ $('project-memory-section').hidden=!state?.project;
+ const memory=state?.projectMemory;
+ memoryRevision=memory?.revision||0;
+ $('project-memory').value=memory?.text||'';
+ $('project-memory-result').textContent='';$('project-category-result').textContent=''; $('project-rename').value=state?.projects.find(p=>p.id===selection.project)?.name||'';
  const drive=state?.drive;
  $('storage-status').textContent=drive?.status==='configured'?'Google Drive 資料夾已設定；雲端上傳狀態由 Drive 桌面版確認。':drive?.status==='needs_login'?'Google Drive 需要重新登入，原檔已保留。':'Google Drive 未連線：請先在主機完成官方桌面版登入。';
  $('storage-folder').value=drive?.folder||'';

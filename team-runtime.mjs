@@ -1,3 +1,4 @@
+import {projectMemoryPrompt} from './project-memory.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
 import {drainDirect,directReply,drainCollaboration,directTerminal} from './direct.mjs';
 import fs from 'node:fs';
@@ -48,7 +49,7 @@ export function saveRoster(c,value) {
   return {agents,saved:true,started:false};
 }
 export function teamBrief(c) {
-  return '專案協作：由使用者指定目標、代理與分工，不預設部門、工作順序或引擎職責。專案代理名冊（設定角色不代表已啟動）：\n'+JSON.stringify(roster(c))+'\n'+
+  return '專案協作：由使用者指定目標、代理與分工，不預設部門、工作順序或引擎職責。專案代理名冊（設定角色不代表已啟動）：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
     '你是這段對話的協調入口，不是整個工作台唯一的中介。使用者可直接和每位代理聊天；已加入的代理可依使用者授權，透過工作台在彼此對話交付協作、收取真實回報、退回修正並驗收。不能宣稱所有訊息或代理協作都必須經過你。只處理交付給你的任務，不強制規劃→開發→審查。'+
     '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
@@ -141,7 +142,8 @@ export function context(cwd = process.cwd(), terminal = process.env.HC_TERMINAL_
   if(!options)options=process.env.HERDR_WORKBENCH_HOME ? read(path.join(process.env.HERDR_WORKBENCH_HOME,'service.json')) || {} : {};
   if(options.legacyProjects?.includes(root))options={...options,stateRoot:null};
   const teamBase=options.stateRoot ? path.join(options.stateRoot,createHash('sha256').update(root).digest('hex').slice(0,32)) : path.join(root,'.herdr-team');
-  return {cwd:root,chat,headless:!!options.headless,teamBase,teamDir:path.join(teamBase,...(chat?['conversations',chat]:[])),terminal,
+  const memoryDir=options.appHome?path.join(options.appHome,'project-memory',createHash('sha256').update(root).digest('hex')):teamBase;
+  return {cwd:root,chat,headless:!!options.headless,teamBase,teamDir:path.join(teamBase,...(chat?['conversations',chat]:[])),memoryDir,terminal,
     run:run||((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})))};
 }
 function coreLaunch(c,argv) {
@@ -235,7 +237,7 @@ export function drainChats(c) {
       save(leaseFile,{terminal:control.terminal,time:Date.now(),messageId:msg.id,chat:c.chat});
       c.run('hc',['send',control.terminal,teamBrief(c)+'\n\n'+routed.text]);
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));
-      log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent'});
+      log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent',provider:t.status.app==='codex'?'codex':'claude'});
       return{sent:1,pending:files.length-1};
     } catch {
       return{sent:0,pending:files.length,reason:'delivery_paused'};

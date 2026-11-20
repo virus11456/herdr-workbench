@@ -122,3 +122,63 @@ test('removed owner is explicitly retryable while transient core failures remain
  const state=await(await fetch(base+'/api/state',{headers})).json();assert.equal(state.startupStopped,true);assert.equal(state.coreError,null);
  const request=()=>fetch(base+'/api/retry-start',{method:'POST',headers:{...headers,Origin:'https://unit.tail.test','Content-Type':'application/json','X-Herdr-CSRF':state.csrfToken},body:JSON.stringify({project:state.project,chat:state.chat})});assert.equal((await request()).status,200);missing=false;const offline=await(await fetch(base+'/api/state',{headers})).json();assert.equal(offline.startupStopped,false);assert(offline.coreError);assert.equal((await request()).status,400);
 });
+
+test('artifact preview is tied to accepted evidence and serves unchanged bytes with inert types',async t=>{
+ const {createHash}=await import('node:crypto');
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-artifacts-'))),home=path.join(dir,'app'),folder=path.join(dir,'project');
+ fs.mkdirSync(home);fs.mkdirSync(folder);
+ const chats=['artifact-chat','other-chat'].map(id=>({id,title:id}));
+ fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Artifacts',chats}]}));
+ const contextFor=chat=>context(folder,null,null,chat);
+ const output=Buffer.from('驗收完成\n');
+ const digest=createHash('sha256').update(output).digest('hex');
+ fs.writeFileSync(path.join(folder,'result.md'),output);
+ fs.writeFileSync(path.join(dir,'elsewhere.md'),output);
+ fs.symlinkSync(path.join(dir,'elsewhere.md'),path.join(folder,'linked.md'));
+ const c=contextFor(chats[0].id);fs.mkdirSync(c.teamDir,{recursive:true});
+ fs.writeFileSync(path.join(c.teamDir,'checklist.json'),JSON.stringify({items:[{id:'report',status:'done',evidence:[{path:'result.md',sha256:digest},{path:'linked.md',sha256:digest},{path:'../elsewhere.md',sha256:digest},{path:'.config/private.json',sha256:digest}]},{id:'pending',status:'pending',evidence:[{path:'result.md',sha256:digest}]}]}));
+ const origin='https://unit.tail.test',headers={'Tailscale-User-Login':'owner@example.test'};
+ const server=createServer({allowedLogin:headers['Tailscale-User-Login'],origin,appHome:home});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port;
+ const state=await(await fetch(base+'/api/state?chat='+chats[0].id,{headers})).json();
+ assert(state.checklist.items.find(x=>x.id==='report').artifacts.some(x=>x.name==='result.md'));
+ const url=overrides=>base+'/api/artifact?'+new URLSearchParams({project:state.project,chat:chats[0].id,kind:'checklist',id:'report',index:'0',mode:'preview',...overrides});
+ assert.equal((await fetch(url())).status,403);
+ assert.equal((await fetch(url(),{headers:{...headers,Origin:'https://other.test'}})).status,403);
+ assert.equal((await fetch(url({chat:chats[1].id}),{headers})).status,404);
+ for(const index of ['1','2','3'])assert.equal((await fetch(url({index}),{headers})).status,404);
+ assert.equal((await fetch(url({id:'pending'}),{headers})).status,404);
+ const preview=await(await fetch(url(),{headers})).json();assert.equal(preview.text,output.toString());
+ const download=await fetch(url({mode:'download'}),{headers});assert.match(download.headers.get('content-disposition'),/^attachment/);assert.equal(download.headers.get('content-type'),'application/octet-stream');assert.deepEqual(Buffer.from(await download.arrayBuffer()),output);
+ fs.writeFileSync(path.join(folder,'result.md'),'Changed after verification');assert.equal((await fetch(url(),{headers})).status,409);
+});
+
+test('project memory is shared across chats with a revision check and stays outside the project folder',async t=>{
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-memory-'))),home=path.join(dir,'app'),folder=path.join(dir,'project');
+ fs.mkdirSync(home);fs.mkdirSync(folder);
+ fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Memory',chats:[{id:'alpha'},{id:'beta'}]}]}));
+ const origin='https://unit.tail.test',headers={'Tailscale-User-Login':'owner@example.test'};
+ const config={allowedLogin:headers['Tailscale-User-Login'],origin,appHome:home,headless:true,stateRoot:path.join(home,'private'),legacyProjects:[folder]};
+ const server=createServer(config);await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port;
+ const state=async chat=>await(await fetch(base+'/api/state?chat='+chat,{headers})).json();
+ const initial=await state('alpha');assert.deepEqual(initial.projectMemory,{revision:0,text:''});
+ const save=(revision,text)=>fetch(base+'/api/project-memory',{method:'POST',headers:{...headers,Origin:origin,'Content-Type':'application/json','X-Herdr-CSRF':initial.csrfToken},body:JSON.stringify({project:initial.project,chat:'alpha',revision,text})});
+ assert.equal((await save(0,'每份成果需附測試結果')).status,200);
+ assert.equal((await save(0,'Old edit')).status,409);
+ assert.equal((await state('beta')).projectMemory.text,'每份成果需附測試結果');
+ const {teamBrief}=await import('../team-runtime.mjs');assert.match(teamBrief(context(folder,null,null,'beta',config)),/每份成果需附測試結果/);
+ assert.equal((await save(1,'')).status,200);assert.equal((await state('beta')).projectMemory.text,'');
+ assert.equal(fs.existsSync(path.join(folder,'.herdr-team','project-memory.json')),false);
+});
+
+test('conversation usage counts matching observed deliveries and replies without guessing an engine',async()=>{
+ const {conversationUsage}=await import('./usage.mjs');
+ const delivered={kind:'delivery',delivery:'sent',messageId:'d',target:'engineer',direct:true,provider:'codex'};
+ const reply={kind:'reply',replyTo:'d',target:'engineer',direct:true};
+ const events=[delivered,delivered,{...delivered,messageId:'other',provider:'?'},{...reply,target:'another'},reply,reply,{...delivered,messageId:'q',delivery:'queued'}];
+ assert.deepEqual(conversationUsage(events),[{provider:'codex',delivered:1,replies:1},{provider:'unknown',delivered:1,replies:0}]);
+});

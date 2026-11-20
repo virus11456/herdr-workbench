@@ -10,8 +10,8 @@ export function flock(state){
 export function attentionItems(state){return flock(state).filter(a=>a.phase==='blocked').map(a=>({id:a.terminal,agentId:a.id,name:a.name,title:'需要你在主機確認',detail:'可能是登入、資料夾信任或工具權限。請查看這位代理的主機終端；此處不會替你同意。'}));}
 export function taskCards(state,agentId=null){
  const rows=[],jobs=state.collaborations||[],jobIds=new Set(jobs.map(j=>j.id)),members=state.agents||[],name=id=>members.find(a=>a.id===id)?.name||id||state.coordinatorName||'領頭羊';
- for(const task of state.checklist?.items||[]){if(jobIds.has(task.id))continue;rows.push({id:'check:'+task.id,title:task.title,owner:task.owner,phase:({pending:'queued',in_progress:'working',blocked:'blocked',done:'done'})[task.status]||'queued',acceptance:task.acceptance,verification:task.verification,detail:task.reason,kind:'checklist'});}
- for(const j of jobs){if(agentId&&j.sourceAgent!==agentId&&j.targetAgent!==agentId)continue;const t=agentTerminal(state,j.targetAgent),blocked=t?.state==='live'&&t.status?.state==='blocked';rows.push({id:'job:'+j.id,title:j.task,owner:name(j.targetAgent),agentId:j.targetAgent,source:name(j.sourceAgent),phase:j.status==='done'?'done':blocked?'blocked':({queued:'queued',working:'working',awaiting_review:'review'})[j.status]||'queued',acceptance:j.acceptance,verification:j.verification,detail:j.feedback,kind:'collaboration'});}
+ for(const task of state.checklist?.items||[]){if(jobIds.has(task.id))continue;rows.push({id:'check:'+task.id,title:task.title,owner:task.owner,phase:({pending:'queued',in_progress:'working',blocked:'blocked',done:'done'})[task.status]||'queued',acceptance:task.acceptance,verification:task.verification,detail:task.reason,kind:'checklist',artifacts:task.artifacts});}
+ for(const j of jobs){if(agentId&&j.sourceAgent!==agentId&&j.targetAgent!==agentId)continue;const t=agentTerminal(state,j.targetAgent),blocked=t?.state==='live'&&t.status?.state==='blocked';rows.push({id:'job:'+j.id,title:j.task,owner:name(j.targetAgent),agentId:j.targetAgent,source:name(j.sourceAgent),phase:j.status==='done'?'done':blocked?'blocked':({queued:'queued',working:'working',awaiting_review:'review'})[j.status]||'queued',acceptance:j.acceptance,verification:j.verification,detail:j.feedback,kind:'collaboration',artifacts:j.artifacts});}
  const messages=state.messages||[],delivery=new Map(messages.filter(m=>m.kind==='delivery'&&m.delivery==='sent').map(m=>[m.messageId,m]));
  const users=messages.filter(m=>m.kind==='user'&&m.messageId&&(agentId?m.direct&&m.target===agentId:true)).slice(-12);
  for(const m of users){const target=m.direct?m.target:null,t=agentTerminal(state,target),sent=delivery.get(m.messageId);const belongs=r=>target?r.direct&&r.target===target:!r.direct;
@@ -21,7 +21,8 @@ export function taskCards(state,agentId=null){
   const control=state.taskControls?.[m.messageId];
   if(control==='cancelled'||control==='stopped')phase=control;
   const action=['cancel','stop'].includes(control)?control:undefined;
-  rows.push({action,id:'message:'+m.messageId,title:m.text||'對話任務',owner:name(target),agentId:target,phase,kind:'message',detail:phase==='cancelled'?'任務已從排隊移除。':phase==='stopped'&&control==='stopped'?'已確認代理停止這一回合。':phase==='replied'?'已收到這位代理的實際回覆；這不代表成果已通過驗收。':phase==='queued'?'訊息已保存，尚未確認送達代理。':undefined});
+  const canPrepareDraft=!!m.text&&['cancelled','stopped'].includes(control)&&(!target||members.some(agent=>agent.id===target));
+  rows.push({action,canPrepareDraft,id:'message:'+m.messageId,title:m.text||'對話任務',owner:name(target),agentId:target,phase,kind:'message',detail:phase==='cancelled'?'任務已從排隊移除。':phase==='stopped'&&control==='stopped'?'已確認代理停止這一回合。':phase==='replied'?'已收到這位代理的實際回覆；這不代表成果已通過驗收。':phase==='queued'?'訊息已保存，尚未確認送達代理。':undefined});
  }
  return rows;
 }
