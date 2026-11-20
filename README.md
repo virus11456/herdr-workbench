@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.3.0-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.3.0-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.3.0-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.3.1-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.3.1-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.3.1-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -133,6 +133,10 @@ npm test
 ## 跨裝置同步
 
 同一個 PWA 入口讀取同一主機資料。「專案管理 → 複製對話連結」會保留 project、chat 與目前 agent，另一台裝置開啟同一位置。名冊是專案共用；不同對話可以各自保留，不強迫其他裝置跳走。版本更新提示可重新載入，草稿保留在該裝置。
+
+排序與 Pin 是專案共用設定，會同步到同一入口的其他裝置。已由真正 iPhone 確認電腦設定的排序／Pin，再由手機置頂、觀察已開啟電腦頁面自動更新，沒有手動重新整理。
+
+代理轉移會保留名稱、引擎、模型、職責與 Pin；原對話和檔案仍留在原專案，目的專案使用自己的會話。已用既有 Claude 代理實際往返轉移：完整設定一致，兩份原對話的既有位元組 SHA-256 一致。這不是將舊聊天搬進目的專案。
 
 舊原生 mod 的索引與背景工作台並非即時雙向同步；日常跨裝置使用同一個 PWA。匯入桌面版只登錄既有資料位置。
 

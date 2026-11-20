@@ -49,8 +49,8 @@ export function saveRoster(c,value) {
 }
 export function teamBrief(c) {
   return '專案協作：由使用者指定目標、代理與分工，不預設部門、工作順序或引擎職責。專案代理名冊（設定角色不代表已啟動）：\n'+JSON.stringify(roster(c))+'\n'+
-    '總控依這個專案的實際需求協調已加入的代理，可以直接處理、依序處理或平行協作，不強制規劃→開發→審查。主管與成員皆可提出協作請求，依所設職責拆解、追蹤與驗收。所有啟動、傳訊、暫停和交接仍由目前總控核對範圍後執行。'+
-    '主管或工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 要求另一位代理協助，總控必須接收並回覆處理結果；代理不能自行繞過總控、權限或沙箱。'+
+    '你是這段對話的協調入口，不是整個工作台唯一的中介。使用者可直接和每位代理聊天；已加入的代理可依使用者授權，透過工作台在彼此對話交付協作、收取真實回報、退回修正並驗收。不能宣稱所有訊息或代理協作都必須經過你。只處理交付給你的任務，不強制規劃→開發→審查。'+
+    '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
     '多步或多代理任務先用 herdr-team-runtime checklist 讀共用清單，再用 request checklist 更新並讀取同 ID response。每項記錄 id/title/owner/status/acceptance/revision；驗收後才標記 done，附 verification 與 evidence（檔案相對路徑及 SHA-256，或同 ID 成功 read response.result 的 JSON SHA-256）。不要以 queued 或代理自稱完成作為驗收。清單依對話保存，接手先續讀，不刪掉未完成項。'+
     '派工時清楚提供任務、工作範圍、產物、驗收、總控回報命令及不得自行啟動其他代理。多位寫入者必須使用獨立 worktree，否則依序寫入。不得自動付費、答覆信任或權限提示。';
