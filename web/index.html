@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261120-direct15"><script src="./app.js?v=20261120-direct15" type="module"></script></head>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261120-direct16"><script src="./app.js?v=20261120-direct16" type="module"></script></head>
 <body>
 <div id="app">
  <button id="sidebar-backdrop" aria-label="關閉專案側欄" tabindex="-1"></button>
@@ -16,6 +16,7 @@
    <div id="welcome"><div id="hero-sheep" aria-hidden="true"></div><h2>你的團隊，<br>準備一起工作。</h2><p id="welcome-description">我們是牧羊人。為每個專案加入夥伴，依目標自由協作。</p><div id="suggestions"></div><div class="workflow"><span>專案與目標由你決定，成員與分工隨任務調整。</span></div></div>
    <details id="task-checklist" hidden><summary id="task-summary">任務清單</summary><div id="task-items"></div></details>
    <div id="messages"></div>
+   <div id="reply-progress" class="reply-progress" role="status" aria-live="polite" aria-atomic="true" hidden></div>
    <section id="history-panel" hidden><div class="history-heading"><h2>對話紀錄</h2><button id="new-chat">＋ 新增對話</button></div><div id="history-list"></div></section>
   </section>
   <div id="notice" role="status" aria-live="polite"></div>

@@ -40,7 +40,7 @@ function saveDirectReply(c,text,key,model){
  const actions=[...text.matchAll(/<herdr-action>([\s\S]*?)<\/herdr-action>/g)].filter(match=>actionable(text,match));
  let visible=text;for(const match of [...actions].reverse())visible=visible.slice(0,match.index)+visible.slice(match.index+match[0].length);
  visible=visible.replace(/<herdr-reply-id>([a-f0-9-]{36})<\/herdr-reply-id>/g,(tag,id)=>id===actual.binding.lastMessageId?'':tag).trim();
- if(visible)log(c,agent.name,visible,'reply',{agentId:agent.id,target:agent.id,direct:true});
+ if(visible)log(c,agent.name,visible,'reply',{agentId:agent.id,target:agent.id,direct:true,replyTo:actual.binding.lastMessageId});
  bindings[c.terminal].captureHash=hash;bindings[c.terminal].awaitingReply=false;if(typeof model==='string'&&model.length<120)bindings[c.terminal].model=model;
  const active=bindings[c.terminal].activeJob;save(file,bindings);
  for(const action of actions)try{collaborate(c,JSON.parse(action[1]));}catch(error){log(c,'系統','協作請求未執行：'+error.message,'progress',{target:agent.id,agentId:agent.id,direct:true});}

@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.2.1-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.2.1-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.2.1-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.2.2-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.2.2-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.2.2-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -98,6 +98,8 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 6. 「專案管理」可改專案顯示名稱，保留原資料夾、專案 ID、檔案與對話。起手建議只填草稿，不自動送出。
 
 模型顯示以 CLI 參數、成功切換確認或官方回覆事件為準；未啟動者顯示引擎與「本對話未啟動」，Claude 顯示「下次使用」，不猜測已生效的模型。代理在首次使用後可常駐待命；每個專案、對話與代理各有會話，新對話不混用其他聊天上下文。指定協調者是使用者的選擇，一般代理對話仍直接送達。既有舊版總控與對話保留相容性，不會擅自刪除。總控終端若已刪除，可明確按「重新開啟總控」續接，原本佇列訊息保留；詳細流程見 [操作教學](docs/USAGE.md)。
+
+工作中的羊會輕輕晃動、綠點緩慢閃爍；聊天裡以「…」區分傳送、排隊、送達及回覆中。等待權限時停止忙碌動畫，收到真實回覆後移除提示。尊重系統減少動態效果設定，文字狀態仍可見。[圖解與狀態說明](docs/USAGE.md#羊的動作與回覆提示)。
 
 Chrome 可安裝 PWA；iPhone / iPad Safari 用「分享 → 加入主畫面」。圖示為 SVG 綿羊。離線僅保留介面外殼，不快取對話、憑證、API 回應或排入任務。
 

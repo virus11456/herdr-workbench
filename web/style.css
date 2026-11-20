@@ -116,3 +116,17 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 
 #retry-start{min-height:44px;flex-shrink:0;font-size:12px}.statusbar:has(#retry-start:not([hidden])){align-items:center;flex-wrap:wrap}
 #send{min-width:44px;min-height:44px}
+
+/* Animate the character, never the row or its touch target. */
+.sheep-avatar.is-starting>svg,.sheep-avatar.is-starting>img{animation:sheep-starting 1.4s ease-in-out infinite;transform-origin:50% 80%}
+.sheep-avatar.is-working>svg,.sheep-avatar.is-working>img{animation:sheep-working 1.8s ease-in-out infinite;transform-origin:50% 80%}
+.live-dot.is-busy{animation:busy-dot 1.6s ease-in-out infinite}
+.live-dot.is-blocked{background:#d8ad68}
+@keyframes sheep-starting{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-3px) rotate(2deg)}}
+@keyframes sheep-working{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-2px) rotate(3deg)}}
+@keyframes busy-dot{0%,100%{opacity:.35}50%{opacity:1}}
+.reply-progress{max-width:800px;margin:8px auto 12px;padding:8px 16px;display:flex;align-items:center;gap:10px;min-height:48px;color:var(--muted);font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.reply-progress[hidden]{display:none}.reply-progress .sheep-avatar{width:32px;height:32px}
+.reply-dots{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}.reply-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;animation:reply-dot 1.4s ease-in-out infinite}.reply-dots i:nth-child(2){animation-delay:.16s}.reply-dots i:nth-child(3){animation-delay:.32s}
+@keyframes reply-dot{0%,65%,100%{opacity:.35;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
+@media(prefers-reduced-motion:reduce){.sheep-avatar>svg,.sheep-avatar>img,.live-dot.is-busy,.reply-dots i{animation:none!important;transform:none!important}}
