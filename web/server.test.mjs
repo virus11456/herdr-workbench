@@ -64,6 +64,16 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  const mention=await(await post('/api/message',{agentId:'frontend',text:'@成員 Question fixture',id:'cccccccc-cccc-cccc-cccc-cccccccccccc'})).json();assert.equal(mention.target,'member');assert.equal(mention.direct,true);assert.equal(JSON.parse(fs.readFileSync(path.join(project,'.herdr-team/conversations/unit-chat/direct-queue',mention.id+'.json'))).text,'Question fixture');
  const html=await (await fetch(base+'/',{headers})).text();assert(html.includes('copy-chat-link'));
  assert.equal((await post('/api/project',{name:'x'.repeat(81)})).status,400);
+ const managementState=await(await fetch(base+'/api/state?project='+data.project+'&chat='+data.chat,{headers})).json();
+ assert.equal((await post('/api/sidebar',{project:data.project,chat:data.chat,...managementState.sidebar,pinned:['frontend']})).status,200);
+ assert.equal((await post('/api/sidebar',{project:data.project,chat:data.chat,...managementState.sidebar,pinned:[]})).status,409);
+ const moveBody={project:data.project,chat:data.chat,action:'move',agentId:'frontend',targetProject:created.project,rosterRevision:managementState.rosterRevision};
+ assert.equal((await post('/api/agent-manage',moveBody,{'X-Herdr-CSRF':'invalid'})).status,403);
+ assert.equal((await post('/api/agent-manage',{...moveBody,targetProject:'unknown'})).status,404);
+ assert.equal((await post('/api/agent-manage',moveBody)).status,200);
+ const transferred=await(await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert(transferred.agents.some(a=>a.id==='frontend'));assert(transferred.sidebar.pinned.includes('frontend'));
+ assert.equal((await post('/api/agent-manage',{project:created.project,chat:created.chat,agentId:'frontend',action:'delete',rosterRevision:transferred.rosterRevision})).status,200);
+ const afterDelete=await(await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert(!afterDelete.agents.some(a=>a.id==='frontend'));assert(afterDelete.agents.some(a=>a.id==='starter'));
 });
 
 test('startup retry API is scoped, explicit and refuses an active coordinator',async t=>{
