@@ -1,9 +1,10 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
+import {flock,attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-sidebar19';
+const UI_BUILD='20261120-pasture22';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -12,7 +13,7 @@ const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-hei
 const initialQuery=new URLSearchParams(location.search);
 let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,historyVisible=false,editing=null,posting=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
-let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='';
+let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',pastureSnapshot='',attentionSnapshot='';
 function hydrateSheep(wrap){
  if(!sheepSource)return;
  const svg=sheepSource.cloneNode(true);svg.classList.add('sheep-character');svg.setAttribute('aria-hidden','true');wrap.replaceChildren(svg);
@@ -81,8 +82,8 @@ async function refresh(){
   render();if(first)restoreDraft();
  }catch(e){if(n===revision){notice(e.message);$('status').textContent='主機離線，請檢查 Tailscale';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
 }
-function switchAgent(id){historyVisible=false;persistDraft();selectedAgent=id;const link=new URL(location.href);if(id)link.searchParams.set('agent',id);else link.searchParams.delete('agent');history.replaceState(null,'',link);restoreDraft();render();document.body.classList.remove('show-sidebar');$('draft').focus();}
-async function switchChat(project,chat){try{persistDraft();await api('select',{project,chat});historyVisible=false;selection={project,chat};selectedAgent=null;state=null;await refresh();restoreDraft();document.body.classList.remove('show-sidebar');}catch(e){notice(e.message);}}
+function switchAgent(id,focusDraft=true){historyVisible=false;persistDraft();selectedAgent=id;const link=new URL(location.href);if(id)link.searchParams.set('agent',id);else link.searchParams.delete('agent');history.replaceState(null,'',link);restoreDraft();render();document.body.classList.remove('show-sidebar');if(focusDraft)$('draft').focus();}
+async function switchChat(project,chat,agent=null){try{persistDraft();await api('select',{project,chat});historyVisible=false;selection={project,chat};selectedAgent=agent;state=null;await refresh();restoreDraft();document.body.classList.remove('show-sidebar');}catch(e){notice(e.message);}}
 let menuContext=null,dragAgent=null;
 const protectedAgent=id=>id==='starter'||id==='__coordinator__';
 const sidebarPrefs=()=>state?.sidebar||{revision:0,order:[...(!state?.agentWorkspace?['__coordinator__']:[]),...(state?.agents||[]).map(a=>a.id)],pinned:[]};
@@ -106,8 +107,11 @@ function renderNav(){
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control,state?.pendingAgents,state?.sidebar]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;closeAgentMenu(false);
  const nav=$('members');nav.replaceChildren();const query=$('search').value.toLocaleLowerCase().trim();
  for(const project of state?.projects||[]){const members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
-  const caption=el('button','project-caption',project.name);caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id);
-  caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};nav.append(caption);if(project.id!==selection.project)continue;
+  const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id);
+  caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};nav.append(caption);if(project.id!==selection.project){
+   const preview=[...(!project.agentWorkspace?[{id:null,name:project.coordinatorName||'領頭羊',provider:'claude'}]:[]),...members];
+   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name),el('span','member-sub',providerName(a.provider)+' · 切換查看狀態'));b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id,a.id);nav.append(b);}continue;
+  }
   for(const id of visibleAgentIds()){const a=id==='__coordinator__'?null:members.find(a=>a.id===id);if(id!=='__coordinator__'&&!a)continue;const lead=!a,name=a?.name||state.coordinatorName||'領頭羊',t=a?terminalFor(a):state.terminals.find(t=>t.address===state.control?.terminal),activity=activityFor(a,t),active=lead?!selectedAgent:selectedAgent===id;
    const row=el('div','member'+(active?' active':'')+(sidebarPrefs().pinned.includes(id)?' pinned':''));row.dataset.agent=id;row.draggable=true;
    const handle=el('span','drag-handle');handle.setAttribute('aria-hidden','true');row.append(handle);
@@ -118,6 +122,29 @@ function renderNav(){
   }
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
+}
+function renderPasture(){
+ const sheep=flock(state),key=JSON.stringify([selection,selectedAgent,sheep]);$('pasture').hidden=historyVisible;
+ const counts={working:sheep.filter(a=>['working','starting'].includes(a.phase)).length,blocked:sheep.filter(a=>a.phase==='blocked').length,ready:sheep.filter(a=>a.phase==='ready').length};
+ $('pasture-counts').textContent=counts.blocked?counts.blocked+' 等你確認':counts.working?counts.working+' 工作中':counts.ready+' 已連線';
+ if(key===pastureSnapshot)return;pastureSnapshot=key;const area=$('pasture-flock');area.replaceChildren();
+ for(const a of sheep){const b=el('button','pasture-sheep');b.type='button';b.dataset.phase=a.phase;b.dataset.agent=a.id||'__coordinator__';b.setAttribute('aria-pressed',String((a.id||null)===(selectedAgent||null)));b.setAttribute('aria-label',a.name+'，'+a.label);const figure=el('span','pasture-figure'),pet=avatar(a.provider||'claude');animateSheep(pet,a.phase==='working'?'working':a.phase==='starting'?'starting':'');figure.append(pet);const dot=el('span','live-dot'+(a.connected?' is-connected':'')+(a.connected&&a.phase==='working'?' is-busy':''));dot.setAttribute('aria-hidden','true');figure.append(dot);if(a.phase==='blocked')figure.append(el('span','sheep-alert','!'));b.append(figure,el('strong','',a.name),el('span','pasture-state',a.label));b.onclick=()=>switchAgent(a.id,false);area.append(b);}
+}
+function renderAttention(){
+ const items=attentionItems(state),key=JSON.stringify([selection,items]);$('attention-panel').hidden=historyVisible||!items.length;
+ if(key===attentionSnapshot)return;attentionSnapshot=key;$('attention-items').replaceChildren();
+ for(const a of items){const row=el('div','attention-item');row.append(el('strong','',a.name),el('p','',a.detail));const action=el('button','','查看處理方式');action.type='button';action.onclick=()=>{switchAgent(a.agentId,false);$('permission-agent').textContent=a.name;$('permission-terminal').textContent=a.id;$('permission-command').textContent='~/.local/bin/hc attach '+a.id;$('permission-dialog').showModal();};row.append(action);$('attention-items').append(row);}
+}
+function renderTasks(){
+ const tasks=taskCards(state,selectedAgent),totals=taskSummary(tasks),key=JSON.stringify([selection,selectedAgent,tasks]);$('task-checklist').hidden=historyVisible||!tasks.length;
+ $('task-summary').textContent='任務進度'+(totals.attention?' · '+totals.attention+' 等待處理':totals.active?' · '+totals.active+' 進行中':totals.review?' · '+totals.review+' 待驗收':' · '+totals.verified+' 已驗收');
+ if(key===checklistSnapshot)return;checklistSnapshot=key;const open=new Set([...$('task-items').querySelectorAll('details[open]')].map(n=>n.dataset.id));$('task-items').replaceChildren();
+ const rank={blocked:0,stopped:1,working:2,delivered:3,queued:4,review:5,replied:6,done:7};
+ for(const task of tasks.sort((a,b)=>rank[a.phase]-rank[b.phase])){const row=el('details','progress-card');row.dataset.id=task.id;row.dataset.phase=task.phase;row.open=open.has(task.id);const summary=el('summary'),title=el('span','task-title',task.title.slice(0,140)),badge=el('span','task-badge',taskLabels[task.phase]);summary.append(title,badge);row.append(summary,el('p','task-owner',(task.source?task.source+' → ':'')+task.owner));
+  if(task.acceptance)row.append(el('p','','驗收條件：'+task.acceptance));if(task.verification)row.append(el('p','','驗收結果：'+task.verification));if(task.detail)row.append(el('p','',task.detail));
+  if(task.phase==='review')row.append(el('p','','代理已回報，等待交付者核對；尚未驗收完成。'));
+  if(task.kind!=='checklist'){const b=el('button','','前往代理對話');b.type='button';b.onclick=()=>switchAgent(task.agentId||null,false);row.append(b);}$('task-items').append(row);
+ }
 }
 function render(){
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
@@ -131,15 +158,7 @@ function render(){
  if(!agent&&state.coordinatorParked&&!state.coreError&&state.appOpen)$('status').textContent='領頭羊待命，收到訊息後續接會話';
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+(state.agentWorkspace?0:1)} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
- const tasks=state.checklist?.items||[],taskStamp=JSON.stringify([selection,state.checklist]);
- $('task-checklist').hidden=historyVisible||!tasks.length;
- if(taskStamp!==checklistSnapshot){checklistSnapshot=taskStamp;$('task-summary').textContent=`任務清單 · ${tasks.filter(t=>t.status==='done').length}/${tasks.length} 已核對完成`;
-  $('task-items').replaceChildren();for(const task of tasks){const row=el('div','task-item'),labels={pending:'待處理',in_progress:'進行中',blocked:'等待處理',done:'已核對完成'};
-   row.append(el('strong','',task.title),el('p','',`${task.owner} · ${labels[task.status]||task.status}`),el('p','','驗收：'+task.acceptance));
-   if(task.reason)row.append(el('p','','待處理：'+task.reason));if(task.verification)row.append(el('p','','核對：'+task.verification));
-   for(const proof of task.evidence||[])row.append(el('code','',`${proof.path||'終端讀取紀錄'} · SHA-256 ${proof.sha256}`));$('task-items').append(row);
-  }
- }
+ renderPasture();renderAttention();renderTasks();
  const all=state.messages||[],deliveries={};for(const e of all)if(e.kind==='delivery')deliveries[e.messageId]=e.delivery;
  const messages=all.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment')&&(details||!agent||m.role===agent.name||m.agentId===agent.id||m.target===agent.id||(live&&m.terminal===live.address)));
  $('welcome').hidden=historyVisible||messages.length>0;$('messages').hidden=historyVisible;$('history-panel').hidden=!historyVisible;document.querySelector('.compose-wrap').hidden=historyVisible;
@@ -149,7 +168,7 @@ function render(){
  const stamp=JSON.stringify([selection,selectedAgent,details,historyVisible,state.coordinatorName,state.agents.map(a=>[a.id,a.name]),state.messagesRevision??messages]);
  const container=$('messages'),wasBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<100;
  if(stamp!==messageSnapshot){messageSnapshot=stamp;container.replaceChildren();
- if(details){container.append(el('div','details-note','這個專案自行設定成員與職責，沒有固定部門或工作順序。代理能提出協作請求，由目前總控統一執行。角色設定不代表已啟動，queued 只代表排入等待。'));}
+ if(details){container.append(el('div','details-note','這個專案自行設定成員與職責，沒有固定部門或工作順序。每位代理都能直接對話，並在你授權後交付協作與驗收。角色設定不代表已啟動，queued 只代表排入等待。'));}
  for(const m of messages){
   const user=m.role==='你',row=el('article','message'+(user?' user':''));
   if(!user){const a=state.agents.find(a=>a.name===m.role||a.id===m.agentId);row.append(avatar(a?.provider||'claude'));}
@@ -276,3 +295,26 @@ $('agent-action-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter
 document.addEventListener('pointerdown',e=>{if(menuContext&&!e.target.closest('#agent-menu')&&!e.target.closest('.member-more'))closeAgentMenu(false);});
 document.addEventListener('keydown',e=>{if(!menuContext)return;if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();closeAgentMenu();return;}if(e.key==='Tab'){closeAgentMenu();return;}const buttons=[...$('agent-menu').querySelectorAll('button:not(:disabled)')],at=buttons.indexOf(document.activeElement);if(['ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(at+(e.key==='ArrowUp'?-1:1)+buttons.length)%buttons.length]?.focus();}},true);
 $('members').addEventListener('scroll',()=>closeAgentMenu(false),{passive:true});window.addEventListener('resize',()=>closeAgentMenu(false),{passive:true});
+
+$('permission-close').onclick=()=>$('permission-dialog').close();
+$('pasture').addEventListener('toggle',()=>{try{localStorage.setItem('herdr-pasture-open',String($('pasture').open));}catch{}});try{if(localStorage.getItem('herdr-pasture-open')==='false')$('pasture').open=false;}catch{}
+let notificationSub=null;
+async function notificationStatus(){
+ const supported='Notification' in window&&'serviceWorker' in navigator&&'PushManager' in window;
+ $('notification-diagnostics').textContent='版本 '+UI_BUILD+' · 系統權限：'+(supported?Notification.permission:'不支援');$('enable-notifications').disabled=!supported;$('notification-status').textContent=supported?'通知尚未開啟':'此瀏覽器不支援通知；iPhone 請從主畫面開啟 Herdr。';
+ if(!supported)return;try{const reg=await navigator.serviceWorker.getRegistration();notificationSub=await reg?.pushManager.getSubscription();const s=notificationSub?await api('notifications',{action:'status',endpoint:notificationSub.endpoint}):null;$('notification-diagnostics').textContent+=' · 裝置訂閱：'+(notificationSub?'有':'無');$('enable-notifications').hidden=!!s?.subscribed;$('disable-notifications').hidden=!notificationSub;$('test-notifications').hidden=!s?.subscribed;$('notification-status').textContent=s?.subscribed?(s.lastError||'此對話通知已開啟；可傳送測試通知確認這台裝置實際收到。'):Notification.permission==='denied'?'通知已被此裝置封鎖，可到系統／瀏覽器設定調整；頁內提醒仍可用。':'尚未為此對話開啟通知。';}catch{$('notification-status').textContent='暫時無法讀取通知設定，請稍後再試。';}
+}
+$('enable-notifications').onclick=async()=>{
+ const button=$('enable-notifications');button.disabled=true;let step='系統通知授權';
+ try{const permission=Notification.permission==='granted'?Promise.resolve('granted'):Notification.requestPermission();if(await permission!=='granted'){await notificationStatus();return;}
+ step='連線主機';$('notification-status').textContent='正在向主機登記通知…';const key=await api('notifications-key');
+ step='啟用裝置推播';const reg=await navigator.serviceWorker.ready;const bytes=Uint8Array.from(atob(key.publicKey.replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0));notificationSub=await reg.pushManager.getSubscription()||await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
+ step='保存通知訂閱';await api('notifications',{action:'subscribe',subscription:notificationSub.toJSON()});await notificationStatus();
+ }catch(error){const reason=['NotAllowedError','InvalidStateError','NetworkError','AbortError','NotSupportedError'].includes(error.name)?'（'+error.name+'）':'';$('notification-status').textContent=step+'未完成'+reason+'。請重試；若仍失敗，回報這段文字即可。';$('notification-diagnostics').textContent='版本 '+UI_BUILD+' · 系統權限：'+Notification.permission+' · 裝置訂閱：'+(notificationSub?'有':'無');}finally{button.disabled=false;}
+};
+$('disable-notifications').onclick=async()=>{try{if(notificationSub){await api('notifications',{action:'unsubscribe',endpoint:notificationSub.endpoint});await notificationSub.unsubscribe();notificationSub=null;}await notificationStatus();}catch{$('notification-status').textContent='關閉通知失敗，請重試。';}};
+$('test-notifications').onclick=async()=>{const b=$('test-notifications');b.disabled=true;try{await api('notifications',{action:'test',endpoint:notificationSub?.endpoint});$('notification-status').textContent='通知服務已接受測試；請確認裝置有實際收到，這還不代表送達。';}catch{$('notification-status').textContent='測試通知未送出，請檢查通知設定與主機連線。';}finally{b.disabled=false;}};
+$('manage-team').addEventListener('click',()=>{$('settings-pasture').checked=$('pasture').open;notificationStatus();});
+$('settings-pasture').onchange=()=>$('pasture').open=$('settings-pasture').checked;
+
+$('show-pasture').onclick=()=>{historyVisible=false;render();$('pasture').open=true;$('pasture').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});$('pasture').querySelector('summary').focus({preventScroll:true});};

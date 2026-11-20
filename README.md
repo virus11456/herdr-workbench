@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.3.1-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.3.1-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.3.1-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.4.0-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.4.0-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.4.0-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -76,7 +76,7 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 
 ### Google Drive 與儲存
 
-主機安裝 Google Drive 桌面版，親自登入並選擇串流檔案。在 PWA「專案管理 → 連線與儲存」查看狀態、指定主機的 Drive 專案資料夾；也能重新執行 `node setup.mjs --drive-root "<Finder 核對的串流資料夾>"`。
+主機安裝 Google Drive 桌面版，親自登入並選擇串流檔案。在 PWA「設定 → 連線與儲存」查看狀態、指定主機的 Drive 專案資料夾；也能重新執行 `node setup.mjs --drive-root "<Finder 核對的串流資料夾>"`。
 
 變更只影響新專案，現有專案不自動搬動。程式不收 Google 密碼；登入與重新授權在 Google 官方桌面版處理。所有客戶端操作同一後台，由主機統一讀寫專案檔案。
 
@@ -95,7 +95,7 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 3. 點某隻羊，直接和它聊天；也可用 `@代理名稱` 指定對象。送出第一則訊息才開啟會話，後續沿用同一會話。
 4. 想協作時，直接對它說「請和工程師一起完成……，完成條件是……」。交付、回報、修正和驗收會出現在相關代理的對話中。
 5. 點代理右側「⋯」管理 Pin、設定、重新命名、轉移專案或刪除；「設定」內可選 Claude 的 Opus／Fable，或按「任命為協調者（Opus）」。管理者預設 Claude Opus 5.5；切換執行中模型必須等 CLI 真正確認。
-6. 「專案管理」可改專案顯示名稱，保留原資料夾、專案 ID、檔案與對話。起手建議只填草稿，不自動送出。
+6. 「設定」可改專案顯示名稱，保留原資料夾、專案 ID、檔案與對話。起手建議只填草稿，不自動送出。
 
 模型顯示以 CLI 參數、成功切換確認或官方回覆事件為準；未啟動者顯示引擎與「本對話未啟動」，Claude 顯示「下次使用」，不猜測已生效的模型。代理在首次使用後可常駐待命；每個專案、對話與代理各有會話，新對話不混用其他聊天上下文。指定協調者是使用者的選擇，一般代理對話仍直接送達。既有舊版總控與對話保留相容性，不會擅自刪除。總控終端若已刪除，可明確按「重新開啟總控」續接，原本佇列訊息保留；詳細流程見 [操作教學](docs/USAGE.md)。
 
@@ -125,14 +125,42 @@ herdr-team-runtime --chat <目前對話ID> response <同一請求ID>
 這段舊通道只允許目前總控操作其登記的工作終端。新直接對話與協作不偽裝成總控、不偽造 `HC_TERMINAL_ID`、不改寫 `control.json`。Codex 保留既有權限設定，Antigravity 使用 `--sandbox`；不加入額外可寫目錄、不代答授權。
 
 ```sh
+npm ci --ignore-scripts --no-audit --no-fund
 npm test
 ```
 
 自動測試使用隔離目錄、模擬 core 及真正的隔離 Node 子程序，不花模型額度。已另做四引擎直接回覆、Opus／Fable 真切換、Opus 向 Codex 交付後退回修正並驗收、Drive 原始檔雲端回讀；實機與新機限制均獨立記錄，不用單元測試代替。
 
+## 羊群牧場、任務進度與提醒
+
+每個專案名稱旁顯示代理總數，所有專案的羊都列在側欄。其他專案尚未查詢的執行狀態顯示「切換查看狀態」，不誤報連線。上方「牧場」按鈕可隨時回到視覺狀態區。
+
+對話上方的「羊群牧場」呈現這段對話的真實代理狀態；可以收合，並在此裝置記住選擇。點羊只切換對話，不會啟動任務，也不會在手機自動叫出鍵盤。
+
+- 綠點：真實 CLI 已連線；工作時羊活動、綠點閃爍，待命時停止。
+- 灰點：未連線或已停止；收到訊息後才啟動。等待登入／信任／權限時顯示「!」與文字提醒，停止工作動畫。
+- 「任務進度」整合這段對話的訊息、共用清單及協作。排隊不算送達，收到回覆不算驗收；協作只有經既有驗收機制核對後才顯示「已驗收」。展開卡片可看負責者、驗收條件與結果。
+- 「需要你確認」會顯示對應代理及真實終端的處理方式。登入、信任及工具權限仍由你在主機親自決定。
+
+![羊群牧場與任務卡，教學測試資料](docs/images/11-pasture-tasks-demo.png)
+
+### 手機背景通知
+
+1. iPhone／iPad 從主畫面的 Herdr PWA 開啟；保持主機開機、背景服務及網路正常。
+2. 在想追蹤的對話，進入「設定 → 通知 → 開啟此對話通知」，親自處理系統授權。不同裝置需各自開啟；可追蹤多段對話。
+3. 點「傳送測試通知」，確認手機實際收到。畫面顯示「通知服務已接受」只是傳送受理，不能當裝置送達證據。
+4. 點通知回到對應專案、對話與代理；需要同一 Tailnet 連線才能讀取私人介面。
+5. 「關閉此裝置通知」移除此裝置在主機登記的全部對話通知，並取消瀏覽器訂閱；其他裝置保留。
+
+通知採 Web Push，可在 PWA 關閉時由裝置服務接收，仍受系統通知設定、網路與省電機制影響。主機每 15 秒檢查已訂閱對話的真實 blocked 狀態，同一等待事件只提醒一次；解除後再次等待才重新提醒。通知只顯示通用確認文字，不傳送對話內容、任務名稱或登入資料。加密推播經裝置的 Apple／Google／Mozilla／Microsoft 服務傳送；私人介面仍維持 loopback＋Tailscale，沒有開啟 Funnel。
+
+VAPID 私鑰與裝置訂閱只保存在主機本機 `notifications/`，不在 Drive、GitHub 或安裝包內。安裝器使用鎖定版本的 `npm ci --omit=dev --ignore-scripts` 安裝 web-push 依賴；需要 Node.js 隨附的 npm 及網路。沒有預設替使用者開啟通知。
+
+參考：[Agent Village 設計與實作](https://github.com/JacobAtchley/herdr-addons/tree/main/agent-village)。本版借鑑「狀態對應角色、點角色切換」的概念，使用自行繪製的 SVG 牧場與原有綿羊，不載入對方原生 gpui-kit mod，不改寫你保存的排序與 Pin。推播依據 [WebKit 官方說明](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/) 與 [web-push 官方函式庫](https://github.com/web-push-libs/web-push)。
+
 ## 跨裝置同步
 
-同一個 PWA 入口讀取同一主機資料。「專案管理 → 複製對話連結」會保留 project、chat 與目前 agent，另一台裝置開啟同一位置。名冊是專案共用；不同對話可以各自保留，不強迫其他裝置跳走。版本更新提示可重新載入，草稿保留在該裝置。
+同一個 PWA 入口讀取同一主機資料。「設定 → 複製對話連結」會保留 project、chat 與目前 agent，另一台裝置開啟同一位置。名冊是專案共用；不同對話可以各自保留，不強迫其他裝置跳走。版本更新提示可重新載入，草稿保留在該裝置。
 
 排序與 Pin 是專案共用設定，會同步到同一入口的其他裝置。已由真正 iPhone 確認電腦設定的排序／Pin，再由手機置頂、觀察已開啟電腦頁面自動更新，沒有手動重新整理。
 

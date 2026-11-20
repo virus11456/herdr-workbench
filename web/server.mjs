@@ -1,3 +1,4 @@
+import {createPushStore} from './push.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
 import {enqueueDirect,retryDirect} from '../direct.mjs';
@@ -55,12 +56,13 @@ export function createServer(config) {
     if(config.core)return config.core(args);
     const {stdout}=await exec(path.join(os.homedir(),'.local/bin/hc'),args,{timeout:4000,maxBuffer:1024*1024});return JSON.parse(stdout);
   };
+  const push=createPushStore({home,origin:config.origin,send:config.pushSend});
   const state=async url=>{
-    const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
-    if(!list.length)return {uiBuild:'20261120-sidebar19',appVersion:'0.3.1-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
+    const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
+    if(!list.length)return {uiBuild:'20261120-pasture22',appVersion:'0.4.0-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
     const picked=summary.find(p=>p.id===choice.p.id);
-    if(picked&&!picked.available)return{uiBuild:'20261120-sidebar19',appVersion:'0.3.1-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    if(picked&&!picked.available)return{uiBuild:'20261120-pasture22',appVersion:'0.4.0-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -81,11 +83,11 @@ export function createServer(config) {
     const taskList=checklist(c),jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c);taskList.items.push(...jobs.map(j=>({id:j.id,title:(members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent)+' → '+(members.find(a=>a.id===j.targetAgent)?.name||j.targetAgent),owner:members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent,acceptance:j.acceptance,status:j.status==='done'?'done':j.status==='queued'?'pending':'in_progress',verification:j.verification,evidence:j.evidence||[]})));
     const ownerModel=read(path.join(c.teamDir,'model.json')),ownerArgs=owner?.foreground?.argv||owner?.argv||[],modelAt=ownerArgs.indexOf('--model');
     const coordinatorParked=owner?.state==='live'&&!owner.status?.app&&control?.phase==='active'&&/(?:^|\/)(?:zsh|bash|sh|fish|nu)$/.test(ownerArgs[0]||'')&&!ownerArgs.includes('-c');
-    return {uiBuild:'20261120-sidebar19',appVersion:'0.3.1-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {uiBuild:'20261120-pasture22',appVersion:'0.4.0-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId})),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&j.status!=='done'),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
-  return http.createServer(async(req,res)=>{
+  const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     const json=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
@@ -95,6 +97,7 @@ export function createServer(config) {
       // Only a localhost Tailscale Serve proxy can reach this listener. Serve strips client-supplied identity headers.
       if(req.headers['tailscale-user-login']!==config.allowedLogin)throw failure('請從你本人已登入 Tailscale 的裝置開啟此連結。',403);
       if(req.headers.origin && req.headers.origin!==config.origin)throw failure('不允許的來源。',403);
+      if(req.method==='GET'&&route==='/api/notifications-key'){json(200,{publicKey:push.publicKey()});return;}
       if(req.method==='GET'&&route==='/api/state'){json(200,await state(url));return;}
       if(req.method==='POST'&&route.startsWith('/api/')) {
         if(req.headers.origin!==config.origin || req.headers['x-herdr-csrf']!==csrf || !String(req.headers['content-type']).startsWith('application/json'))throw failure('請重新整理頁面後再試。',403);
@@ -122,6 +125,13 @@ export function createServer(config) {
           rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/notifications'){
+          if(data.action==='subscribe'){json(200,push.add(data.subscription,p.id,chat));return;}
+          if(data.action==='unsubscribe'){json(200,push.remove(data.endpoint));return;}
+          if(data.action==='status'){json(200,push.status(data.endpoint,p.id,chat));return;}
+          if(data.action==='test'){json(200,await push.test(data.endpoint,p.id,chat));return;}
+          throw failure('不支援的通知操作。');
+        }
         if(route==='/api/sidebar'){json(200,updateSidebar(c,!!p.agentWorkspace,data));return;}
         if(route==='/api/agent-manage'){
           if(!['delete','move'].includes(data.action))throw failure('不支援的代理操作。');
@@ -162,13 +172,15 @@ export function createServer(config) {
         }
         throw failure('找不到操作。',404);
       }
-      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/viewport.mjs','/activity.mjs','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
+      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/viewport.mjs','/activity.mjs','/tasks.mjs','/pasture.svg','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
         if(url.pathname==='/herdr'){res.writeHead(302,{Location:'/herdr/'});res.end();return;}
         const name=route==='/'?'index.html':route.slice(1);res.writeHead(200,{'Content-Type':contentTypes[path.extname(name)]});res.end(fs.readFileSync(path.join(root,name)));return;
       }
       throw failure('找不到頁面。',404);
     }catch(e){json(e.status||400,{error:e.status?e.message:'操作失敗，請重新整理或查看主機紀錄。'});}
   });
+  const timer=setInterval(()=>push.tick(async({project,chat})=>state(new URL('http://localhost/api/state?'+new URLSearchParams({project,chat})))).catch(()=>{}),15000);timer.unref();server.on('close',()=>clearInterval(timer));
+  return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const config=read(path.join(root,'config.json'));

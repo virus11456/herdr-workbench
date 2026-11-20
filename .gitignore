@@ -22,3 +22,5 @@ team-work-backups/
 node_modules/
 mods/team-chat/gpui-kit.d.ts
 mods/team-chat/jsconfig.json
+
+notifications/

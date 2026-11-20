@@ -26,7 +26,7 @@ export function deploymentPlan(input,tools){
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['team-runtime.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['package.json','package-lock.json','team-runtime.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
  try{existingHooks=JSON.parse(fs.readFileSync(agyHooks,'utf8'));if(!existingHooks||typeof existingHooks!=='object'||Array.isArray(existingHooks))throw Error('Invalid hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
  add(agyHooks,JSON.stringify({...existingHooks,'herdr-workbench-reply':{Stop:[{type:'command',command:quote(tools.node)+' '+quote(path.join(home,'agy-reply.mjs')),timeout:10}]}},null,2)+'\n');
@@ -47,7 +47,7 @@ export function deploymentPlan(input,tools){
  for(const [name,marker,command]of [['herdr-claude-task','@CLAUDE_COMMAND@','herdr-team-claude'],['herdr-codex-implement','@CODEX_COMMAND@','herdr-team-codex'],['herdr-minimax-cn','@MINIMAX_COMMAND@','herdr-team-minimax'],['herdr-antigravity-task','@ANTIGRAVITY_COMMAND@','herdr-team-antigravity']]){
   add(path.join(core,'templates',name+'.md'),fs.readFileSync(path.join(source,'templates',name+'.md'),'utf8').replaceAll(marker,quote(path.join(bin,command))));
  }
- for(const name of ['server.mjs','agent-management.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','activity.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
+ for(const name of ['server.mjs','push.mjs','tasks.mjs','agent-management.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','activity.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','pasture.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
  add(path.join(home,'team-claude-settings.json'),JSON.stringify(hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),null,2)+'\n');
  add(path.join(home,'service.json'),JSON.stringify(config,null,2)+'\n');add(path.join(home,'web/config.json'),JSON.stringify(config,null,2)+'\n');
  if(input.projects)add(path.join(home,'web/projects.json'),JSON.stringify(input.projects,null,2)+'\n');
@@ -96,10 +96,11 @@ async function main(){
   input.projects=mergeProjects(groups);input.legacyProjects=[...new Set([...(previous?.legacyProjects||[]),...groups.slice(1).flatMap(list=>list.map(p=>fs.realpathSync(p.folder)))])];
  }
  const tools={node:process.execPath,...Object.fromEntries(['hc','claude','codex','mcode','agy'].map(name=>[name,findTool(name)]))};
- const plan=deploymentPlan(input,tools);console.log(JSON.stringify({mode:'background',files:plan.files.map(f=>f.target),links:plan.links,projects:input.projects?.length||0,drive:plan.config.driveRoot?'configured':'needs_login',launchAgents:plan.agents.map(a=>a.label)},null,2));
+ const plan=deploymentPlan(input,tools);console.log(JSON.stringify({mode:'background',dependencies:{command:'npm ci --omit=dev --ignore-scripts --no-audit --no-fund',lockfile:'package-lock.json',installScripts:false},files:plan.files.map(f=>f.target),links:plan.links,projects:input.projects?.length||0,drive:plan.config.driveRoot?'configured':'needs_login',launchAgents:plan.agents.map(a=>a.label)},null,2));
  if(flags.has('--dry-run')){console.log('Dry run：未寫入檔案、未啟動代理、未修改 Tailscale。');return;}
  if(flags.has('--confirm')){if(!process.stdin.isTTY)throw Error('請在主機互動式終端確認安裝。');const ui=createInterface({input:process.stdin,output:process.stdout});let answer;try{answer=await ui.question('依上列範圍備份並安裝？[y/N] ');}finally{ui.close();}if(!/^[yY]$/.test(answer.trim())){console.log('已取消，未安裝。');return;}}
  const backup=applyDeployment(plan);console.log('備份：'+backup);
+ const npm=findTool('npm');execFileSync(npm,['ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],{cwd:plan.config.appHome,stdio:'inherit'});
  if(!flags.has('--no-start'))for(const a of plan.agents){
   const domain='gui/'+process.getuid();let loaded=false;try{execFileSync('launchctl',['print',domain+'/'+a.label],{stdio:'ignore'});loaded=true;}catch{}
   if(loaded){execFileSync('launchctl',['kickstart','-k',domain+'/'+a.label],{stdio:'inherit'});continue;}

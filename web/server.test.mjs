@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {saveRoster,context} from '../team-runtime.mjs';
+import {createECDH,randomBytes} from 'node:crypto';
 import {createServer} from './server.mjs';
 test('a kept login shell is parked rather than a connected or starting agent; permission prompts are not parked',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-parked-')),home=path.join(root,'app'),folder=path.join(root,'project');fs.mkdirSync(home);fs.mkdirSync(folder);fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Parked fixture',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
@@ -13,7 +14,7 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-web-unit-'));const app=path.join(dir,'app'),project=path.join(dir,'project');fs.mkdirSync(app);fs.mkdirSync(project);
  fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[{folder:project,name:'Unit project',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
  saveRoster(context(project,null),[{id:'member',name:'成員',provider:'codex',level:'worker',group:'',brief:''}]);
- const server=createServer({projectRoot:path.join(dir,'new-projects'),allowedLogin:'owner@example.test',origin:'https://unit.tail.test',appHome:app,core:()=>{throw Error('No real core allowed');}});
+ const pushes=[];const server=createServer({pushSend:async(sub,payload)=>pushes.push(JSON.parse(payload)),projectRoot:path.join(dir,'new-projects'),allowedLogin:'owner@example.test',origin:'https://unit.tail.test',appHome:app,core:()=>{throw Error('No real core allowed');}});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
  const base='http://127.0.0.1:'+server.address().port;
  assert.equal((await fetch(base+'/api/state')).status,403);
@@ -29,6 +30,18 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  assert.equal((await fetch(base+'/config.json',{headers})).status,404);
  const data=await (await fetch(base+'/api/state',{headers})).json();assert.equal(data.agents.length,1);assert.equal(data.terminals.length,0);
  const post=(route,body,extra={})=>fetch(base+route,{method:'POST',headers:{...headers,Origin:'https://unit.tail.test','Content-Type':'application/json','X-Herdr-CSRF':data.csrfToken,...extra},body:JSON.stringify({project:data.project,chat:data.chat,...body})});
+ const ec=createECDH('prime256v1');ec.generateKeys();const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/unit-fixture',keys:{p256dh:ec.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')}};
+ assert.equal((await fetch(base+'/api/notifications-key')).status,403);
+ const publicReply=await(await fetch(base+'/api/notifications-key',{headers})).json();assert(publicReply.publicKey);assert(!('privateKey' in publicReply));
+ assert.equal((await post('/api/notifications',{action:'subscribe',subscription},{'X-Herdr-CSRF':'wrong'})).status,403);
+ assert.equal((await post('/api/notifications',{action:'subscribe',subscription},{Origin:'https://evil.test'})).status,403);
+ assert.equal((await post('/api/notifications',{action:'subscribe',subscription,project:'unknown'})).status,404);
+ assert.equal((await post('/api/notifications',{action:'subscribe',subscription:{...subscription,endpoint:'https://127.0.0.1/'}})).status,400);
+ assert.equal((await post('/api/notifications',{action:'subscribe',subscription})).status,200);
+ assert.equal((await(await post('/api/notifications',{action:'status',endpoint:subscription.endpoint})).json()).subscribed,true);
+ const pushTest=await(await post('/api/notifications',{action:'test',endpoint:subscription.endpoint})).json();assert.equal(pushTest.acceptedByPushService,true);assert.equal(pushTest.deliveredToDevice,false);assert.equal(pushes.length,1);assert.equal(pushes[0].title,'Herdr · 測試通知');
+ assert.equal((await post('/api/notifications',{action:'unsubscribe',endpoint:subscription.endpoint})).status,200);
+ assert.equal((await(await post('/api/notifications',{action:'status',endpoint:subscription.endpoint})).json()).subscribed,false);
  assert.equal((await post('/api/message',{text:'do not send'}, {'X-Herdr-CSRF':'wrong'})).status,403);
  assert.equal((await post('/api/message',{text:'do not send'}, {Origin:'https://evil.test'})).status,403);
  assert.equal((await post('/api/message',{project:'unregistered',text:'do not send'})).status,404);
