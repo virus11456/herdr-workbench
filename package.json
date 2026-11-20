@@ -1,6 +1,6 @@
 {
   "name": "herdr-workbench",
-  "version": "0.4.1-dev",
+  "version": "0.5.0-dev",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test direct.test.mjs checklist.test.mjs team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs web/viewport.test.mjs web/activity.test.mjs web/agent-management.test.mjs web/tasks.test.mjs web/push.test.mjs web/sw.test.mjs",
+    "test": "node --test direct.test.mjs checklist.test.mjs team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs web/viewport.test.mjs web/activity.test.mjs web/agent-management.test.mjs web/tasks.test.mjs web/push.test.mjs web/sw.test.mjs web/pasture.test.mjs",
     "setup": "node setup.mjs",
     "setup:preview": "node setup.mjs --dry-run"
   },

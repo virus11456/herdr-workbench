@@ -1,10 +1,11 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
+import {createPasture} from './pasture.mjs';
 import {flock,attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-pasture23';
+const UI_BUILD='20261120-pixel24';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -123,12 +124,12 @@ function renderNav(){
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
 }
+let pastureScene=null;
 function renderPasture(){
  const sheep=flock(state),key=JSON.stringify([selection,selectedAgent,sheep]);$('pasture').hidden=historyVisible;
  const counts={working:sheep.filter(a=>['working','starting'].includes(a.phase)).length,blocked:sheep.filter(a=>a.phase==='blocked').length,ready:sheep.filter(a=>a.phase==='ready').length};
  $('pasture-counts').textContent=counts.blocked?counts.blocked+' 等你確認':counts.working?counts.working+' 工作中':counts.ready+' 已連線';
- if(key===pastureSnapshot)return;pastureSnapshot=key;const area=$('pasture-flock');area.replaceChildren();
- for(const a of sheep){const b=el('button','pasture-sheep');b.type='button';b.dataset.phase=a.phase;b.dataset.agent=a.id||'__coordinator__';b.setAttribute('aria-pressed',String((a.id||null)===(selectedAgent||null)));b.setAttribute('aria-label',a.name+'，'+a.label);const figure=el('span','pasture-figure'),pet=avatar(a.provider||'claude');animateSheep(pet,a.phase==='working'?'working':a.phase==='starting'?'starting':'');figure.append(pet);const dot=el('span','live-dot'+(a.connected?' is-connected':'')+(a.connected&&a.phase==='working'?' is-busy':''));dot.setAttribute('aria-hidden','true');figure.append(dot);if(a.phase==='blocked')figure.append(el('span','sheep-alert','!'));b.append(figure,el('strong','',a.name),el('span','pasture-state',a.label));b.onclick=()=>switchAgent(a.id,false);area.append(b);}
+ if(key===pastureSnapshot)return;pastureSnapshot=key;pastureScene??=createPasture($('pasture-flock'),{onSelect:id=>switchAgent(id,false)});pastureScene.update(sheep,selectedAgent);
 }
 function renderAttention(){
  const items=attentionItems(state),key=JSON.stringify([selection,items]);$('attention-panel').hidden=historyVisible||!items.length;
