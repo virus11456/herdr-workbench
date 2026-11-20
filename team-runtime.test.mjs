@@ -62,6 +62,17 @@ test('foreign callers, escaping folders and duplicate live roles are rejected',t
   c.run=(_cmd,argv)=>argv[0]==='ls'?{terminals:[{address:'tunitworker'}]}:{address:'tunitworker',parent:'tunitowner',state:'live'};
   assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args}),/already has a live/);
 });
+test('Google personal agents use Antigravity without starting agents when saved',t=>{
+ const {c}=fixture(t);owner(c);
+ const member={id:'google-helper',name:'Google helper',provider:'antigravity',level:'worker'};
+ assert.equal(saveRoster(c,[member]).started,false);
+ assert.equal(routeMessage('@google-helper Review',roster(c)).target,'google-helper');
+ const calls=[];c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='ls')return{terminals:[]};if(args[0]==='run')return{address:'tunitgoogle'};throw Error('Unexpected call');};
+ executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:member.id,name:'unit-google',task:'Read only review'}});
+ const run=calls.find(args=>args[0]==='run');assert(run.includes('herdr-antigravity-task'));
+ assert(!run.some(arg=>/--yolo|--skip-trust|--no-sandbox/.test(arg)));
+ assert.throws(()=>validateRoster([{...member,id:'antigravity'}]),/唯一/);
+});
 test('worker collaboration report is delivered to the coordinator, not executed as a new agent',t=>{
   const {c}=fixture(t);owner(c);const calls=[];
   fs.mkdirSync(path.join(c.teamDir,'outbox'));

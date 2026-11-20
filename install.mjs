@@ -34,6 +34,7 @@ try {
   }
   if (process.platform === 'win32') throw new Error('此安裝包使用 POSIX shell，僅支援 macOS／Linux。');
   if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('需要 Node.js 20 或更新版本。');
+  if(fs.existsSync(path.join(home,'.config/herdr-workbench/service.json')))throw Error('已安裝背景工作台；舊原生安裝器會覆寫同名啟動器，因此已停止。請使用 setup.mjs 更新背景版，未更動任何檔案。');
   const tools = Object.fromEntries(['hc', 'herdr-app', 'claude', 'codex', 'mcode'].map(name => [name, findTool(name)]));
   const replace = {
     '@NODE_SHELL@': quote(process.execPath),
@@ -50,6 +51,7 @@ try {
     ['layouts/team-work.json', path.join(app, 'layouts/team-work.json')],
     ['team-runtime.mjs', path.join(app, 'team-runtime.mjs')],
     ['checklist.mjs', path.join(app, 'checklist.mjs')],
+    ['direct.mjs', path.join(app, 'direct.mjs')],
     ...['lead', 'backup', 'claude', 'runtime'].map(name => [`bin/herdr-team-${name}`, path.join(bin, `herdr-team-${name}`)]),
     ...['herdr-claude-task', 'herdr-codex-implement', 'herdr-minimax-cn'].map(name => [`templates/${name}.md`, path.join(core, `templates/${name}.md`)])
   ].map(([source, target]) => {

@@ -37,7 +37,13 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  assert.equal(JSON.parse(fs.readFileSync(path.join(project,'.herdr-team/roster.json'))).length,2);
  assert.equal(JSON.parse(fs.readFileSync(path.join(app,'team-chat.json'))).chatId,next.chat);
  const created=await (await post('/api/project',{name:'New project'})).json();assert(created.project);assert(created.chat);
- const newState=await (await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(newState.agents.length,0);assert.equal(newState.projects.length,2);
+ const newState=await (await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(newState.agents.length,1);assert.equal(newState.agents[0].id,'starter');assert.equal(newState.agentWorkspace,true);assert.equal(newState.projects.length,2);
+ const registered=JSON.parse(fs.readFileSync(path.join(app,'web/projects.json'))).find(p=>p.chats.some(c=>c.id===created.chat)),folder=registered.folder;
+ assert.equal((await post('/api/project-name',{project:created.project,chat:created.chat,name:'Renamed project'})).status,200);
+ const renamedState=await(await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(renamedState.projects.find(p=>p.id===created.project).name,'Renamed project');assert.equal(JSON.parse(fs.readFileSync(path.join(app,'web/projects.json'))).find(p=>p.folder===folder).chats[0].id,created.chat);
+ assert.equal((await post('/api/appoint',{project:created.project,chat:created.chat,agentId:'starter'})).status,200);
+ const appointed=await(await fetch(base+'/api/state?project='+created.project+'&chat='+created.chat,{headers})).json();assert.equal(appointed.coordinatorAgentId,'starter');assert.equal(appointed.agents[0].model,'claude-opus-5-5');
+ assert.equal((await post('/api/appoint',{project:created.project,chat:created.chat,agentId:'foreign'})).status,400);
  const resumed=await (await fetch(base+'/api/state',{headers})).json();assert.equal(resumed.project,created.project);assert.equal(resumed.chat,created.chat);
  assert.equal((await post('/api/select',{project:data.project,chat:data.chat})).status,200);
  const otherClient=await (await fetch(base+'/api/state',{headers})).json();assert.equal(otherClient.project,data.project);assert.equal(otherClient.chat,data.chat);
@@ -45,6 +51,8 @@ test('web bridge enforces Tailnet identity, origin, CSRF and registered project 
  assert.equal((await post('/api/select',{project:created.project,chat:created.chat},{'X-Herdr-CSRF':'invalid'})).status,403);
  const stillSelected=await (await fetch(base+'/api/state',{headers})).json();assert.equal(stillSelected.project,data.project);
  assert.equal(JSON.parse(fs.readFileSync(path.join(app,'web/selection.json'))).chat,data.chat);
+ const direct=await(await post('/api/message',{agentId:'member',text:'Direct message fixture only',id:'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'})).json();assert.equal(direct.direct,true);assert.equal(direct.target,'member');assert(fs.existsSync(path.join(project,'.herdr-team/conversations/unit-chat/direct-queue',direct.id+'.json')));
+ const mention=await(await post('/api/message',{agentId:'frontend',text:'@成員 Question fixture',id:'cccccccc-cccc-cccc-cccc-cccccccccccc'})).json();assert.equal(mention.target,'member');assert.equal(mention.direct,true);assert.equal(JSON.parse(fs.readFileSync(path.join(project,'.herdr-team/conversations/unit-chat/direct-queue',mention.id+'.json'))).text,'Question fixture');
  const html=await (await fetch(base+'/',{headers})).text();assert(html.includes('copy-chat-link'));
  assert.equal((await post('/api/project',{name:'x'.repeat(81)})).status,400);
 });

@@ -18,7 +18,7 @@ test('background chat starts core directly, waits for idle, and sends the same q
 });
 test('deployment plan is read-only; apply preserves previous settings and handles quoted paths',t=>{
  const {root,project}=fixture(t),home=path.join(root,"app's home"),bin=path.join(root,'bin');
- const input={home,bin,core:path.join(root,'core'),launchAgents:path.join(root,'agents'),origin:'https://unit.tail.test',login:'owner@example.test',projectRoot:project};
+ const input={home,bin,core:path.join(root,'core'),antigravityHooks:path.join(root,'google/hooks.json'),minimaxHooks:path.join(root,'minimax/hooks.json'),launchAgents:path.join(root,'agents'),origin:'https://unit.tail.test',login:'owner@example.test',projectRoot:project};
  const tools=Object.fromEntries(['node','hc','claude','codex','mcode'].map(n=>[n,path.join(bin,n)]));const plan=deploymentPlan(input,tools);assert(!fs.existsSync(home));
  const backup=applyDeployment(plan);assert(fs.existsSync(path.join(backup,'manifest.json')));const runtime=fs.readFileSync(path.join(bin,'herdr-team-runtime'),'utf8');assert(runtime.includes('HERDR_WORKBENCH_HOME='));assert(!runtime.includes('@NODE_SHELL@'));
  const file=path.join(home,'web/config.json');fs.writeFileSync(file,'{"keep":"fixture"}');const saved=applyDeployment(plan),manifest=JSON.parse(fs.readFileSync(path.join(saved,'manifest.json')));const item=manifest.files.find(x=>x.target===file);assert.equal(fs.readFileSync(item.backup,'utf8'),'{"keep":"fixture"}');
@@ -36,8 +36,13 @@ test('worker notifications only report to the registered real parent and reject 
  fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitowner'}));
  fs.writeFileSync(path.join(c.teamDir,'worker-bindings.json'),JSON.stringify({tunitworker:{owner:'tunitowner',chat:'unit-chat',name:'Codex',sentAt:Date.now()-1000}}));
  const event={type:'agent-turn-complete','turn-id':'unit-turn','last-assistant-message':'Unit result: 55'};
+ assert.equal(captureReply({...event,'last-assistant-message':'{"title":"Session title"}'},c,'Codex').reason,'session_title_metadata');
  assert.equal(captureReply(event,c,'Codex').captured,true);assert.equal(captureReply(event,c,'Codex').reason,'duplicate');
  assert.equal(fs.readdirSync(path.join(c.teamDir,'outbox')).length,1);
+ assert.equal(captureReply({...event,'turn-id':'next-turn','last-assistant-message':'{"sum":55}'},c,'Codex').captured,true);
+ assert.equal(fs.readdirSync(path.join(c.teamDir,'outbox')).length,2);
+ fs.appendFileSync(path.join(c.teamDir,'messages.jsonl'),JSON.stringify({terminal:c.terminal,kind:'worker-report',time:new Date().toISOString(),text:'Manual report'})+'\n');
+ assert.equal(captureReply({...event,'turn-id':'manual-turn'},c,'Codex').reason,'explicit_report_already_sent');
  const foreign={...c,terminal:'tunitforeign'};assert.equal(captureReply(event,foreign,'Codex').reason,'unregistered_worker');
  const tampered={...c,run:()=>({parent:'tunitother',labels:{}})};assert.equal(captureReply({...event,'turn-id':'other-turn'},tampered,'Codex').reason,'foreign_worker');
 });

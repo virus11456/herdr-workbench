@@ -2,7 +2,9 @@
 
 <img src="web/icon-192.png" width="96" alt="Herdr 綿羊圖示">
 
-牧羊人的 AI 工作台：以專案分類，和一個總控聊天，再依需要加入多個 Claude、Codex 或 MiniMax 代理。角色、數量與分工由專案決定，不寫死工作流程。
+牧羊人的 AI 工作台。新專案先有一隻羊，其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。
+
+目前版本：**0.2.0-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.2.0-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.2.0-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -25,10 +27,17 @@
 | Claude Code | [安裝與登入](https://code.claude.com/docs/en/setup) |
 | Codex CLI | [官方專案](https://github.com/openai/codex) |
 | MiniMax Code `mcode` | [官方專案](https://github.com/MiniMax-AI/minimax-code) |
+| Antigravity CLI `agy`（Google 個人帳號） | [官方安裝](https://antigravity.google/docs/getting-started?tab=cli)、[個人帳號登入](https://antigravity.google/docs/install?tab=cli) |
 | Tailscale | [官方下載](https://tailscale.com/download)，各裝置加入同一 tailnet |
 | Google Drive 桌面版（選用） | [官方安裝及登入](https://support.google.com/drive/answer/10838124) |
 
 安裝器檢查依賴，但不包含第三方二進位或帳號資料，不代答任何登入、權限或付費確認，不停用沙箱。
+
+### Google 個人版
+
+Google 官方公告：自 2026-06-18 起，免費個人帳號與 Google AI Pro／Ultra 的 Gemini CLI 使用方式改到 Antigravity CLI；企業與 API 金鑰另有規則。參考 [官方轉移公告](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/)。本工作台的「Google / Antigravity」使用 `agy`，不會自動設定 API 金鑰、Google Cloud 專案或按量付費。
+
+先依官方說明安裝 `agy` 並確認 `agy --version`。在主機終端啟動 `agy`，由本人完成 Google OAuth、條款及必要授權，再於左側「加入新代理」選擇「Google / Antigravity」。保存設定不會啟動代理；你可直接和它聊天，也能授權其他代理向它交付協作。登入成功仍需實際任務、真實回報與驗收，不能以安裝成功代替協作通過。
 
 ## 一次設定，背景執行
 
@@ -48,6 +57,8 @@ node setup.mjs --origin https://your-host.your-tailnet.ts.net --login owner@exam
 ```
 
 `--dry-run` 不寫入、不啟動代理。`--no-start` 只安裝、不啟動服務。所有既有同名檔案先備份至 `~/.config/herdr-workbench/backups/<批次>/`，附還原清單；備份留在本機。
+
+安裝範圍也包含官方回覆 hook：Claude 的工作台專用設定、Codex 的單次會話 notify，以及 Google `~/.gemini/config/hooks.json`、MiniMax `~/.minimax/hooks.json`。既有內容先備份、保留其他 hook；不替使用者開啟原本停用的 MiniMax 全域 hooks。這些介面只接收已登記的真實代理回覆與限定的專案協作動作，不修改工具權限、信任或沙箱。
 
 安裝目錄為 `~/.config/herdr-workbench/`，Web 預設埠 `48724`。兩個使用者 LaunchAgent 是 `dev.herdr.workbench-web` 與 `dev.herdr.workbench-queue`。登入 macOS 後自動執行；主機仍需開機且保持登入，不會自動更改睡眠設定或取得管理員權限。
 
@@ -79,43 +90,51 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 
 ## 日常操作
 
-1. 新增／選擇專案，預設只有一個總控。
-2. 左側「加入新代理」可選名稱、引擎與職責；同一引擎可加入多位。保存設定不啟動代理。
-3. 聊天交付目標，總控依名冊安排；起手建議只填草稿。
-4. 點代理標題可改名；專案管理可編輯其他角色、查看對話與詳細紀錄。
+1. 建立專案，先有一隻「我的助手」；保存設定不會啟動代理。
+2. 左側「加入新代理」選名稱、引擎與職責；同一引擎可以有多位。
+3. 點某隻羊，直接和它聊天；也可用 `@代理名稱` 指定對象。送出第一則訊息才開啟會話，後續沿用同一會話。
+4. 想協作時，直接對它說「請和工程師一起完成……，完成條件是……」。交付、回報、修正和驗收會出現在相關代理的對話中。
+5. 點上方「角色設定」改名、選 Claude 的 Opus／Fable，或按「任命為協調者（Opus）」；管理者預設 Claude Opus 5.5。切換執行中 Claude 模型必須等 CLI 真正確認，未確認不顯示成功。
+6. 「專案管理」可改專案顯示名稱，保留原資料夾、專案 ID、檔案與對話。起手建議只填草稿，不自動送出。
+
+模型顯示以 CLI 參數、成功切換確認或官方回覆事件為準；尚無證據時顯示「模型待確認」或「下次使用」，不猜測。指定協調者是使用者的選擇，一般代理對話仍直接送達。既有舊版總控與對話保留相容性，不會擅自刪除。
 
 Chrome 可安裝 PWA；iPhone / iPad Safari 用「分享 → 加入主畫面」。圖示為 SVG 綿羊。離線僅保留介面外殼，不快取對話、憑證、API 回應或排入任務。
 
 登入、信任、權限與付款提示在主機親自確認。沒有桌面版時，在主機 `hc ls` 查真實終端，再以 `hc attach <終端ID>` 接管。瀏覽器工具需自行授權；有多個瀏覽器時不能隨選。
 
-總控在啟動／信任階段尚未就緒就結束時，背景服務會停止等待，避免反覆重開。準備好後，可在聊天狀態列親自按「重新開啟總控」；工具的登入、信任與權限仍需自行確認。終端已結束時，請查目前登記的真實 ID，不沿用過期 ID。
+代理在啟動／信任階段尚未就緒就結束時，服務會停止等待；親自按「重新開啟代理」才重試，不反覆重開提示。一位代理等待權限不會阻擋其他代理聊天。首次仍需工具載入與本人確認，不能保證每個模型固定秒數回覆。
 
 ## 協作與測試
 
-`queued` 只是排隊；需核對 `first_message.sent`、真實回報及成果。沙箱通道必須從目前真實總控送出請求，再讀同一 ID 的結果：
+`queued` 只是排隊。直接聊天由正式 Web 的身分／Origin／CSRF 檢查送入指定代理；官方回覆 hook 再核對真實終端、專案與對話綁定。代理的協作只能指向該專案已加入的成員，不能執行任意主機命令。每個協作有 ID、版本、完成條件、真實回覆與終端讀取證據，原代理核對後才可驗收；不符合可以要求修正。
+
+舊總控相容模式的沙箱請求仍須由目前真實總控送出，再讀同一 ID 的結果：
 
 ```sh
 herdr-team-runtime --chat <目前對話ID> request list '{}'
 herdr-team-runtime --chat <目前對話ID> response <同一請求ID>
 ```
 
-只有目前總控能操作該專案與團隊。不得偽造終端 ID、複製其他電腦的 `control.json` 或關閉沙箱。Codex 啟動器保留既有權限設定，不加入額外可寫目錄。官方通知 hook 只在核對真實父子終端與專案綁定後，把已登記 worker 的回覆送回目前總控；它不接受任意命令或替代理解除沙箱。
+這段舊通道只允許目前總控操作其登記的工作終端。新直接對話與協作不偽裝成總控、不偽造 `HC_TERMINAL_ID`、不改寫 `control.json`。Codex 保留既有權限設定，Antigravity 使用 `--sandbox`；不加入額外可寫目錄、不代答授權。
 
 ```sh
 npm test
 ```
 
-自動測試使用隔離目錄與模擬 core，不花模型額度。開發期間已做過三種引擎派工回報、兩個 Codex 透過總控交接的實測；這不是其他帳號／新機的保證。背景啟動、關閉桌面後運作及手機版面仍須分別依版本實測，不能用單元測試取代。
+自動測試使用隔離目錄、模擬 core 及真正的隔離 Node 子程序，不花模型額度。已另做四引擎直接回覆、Opus／Fable 真切換、Opus 向 Codex 交付後退回修正並驗收、Drive 原始檔雲端回讀；實機與新機限制均獨立記錄，不用單元測試代替。
 
 ## 跨裝置同步
 
-同一個 PWA 入口讀取同一主機資料。一般入口接續最近選取的專案／對話；「專案管理 → 複製對話連結」可讓另一台裝置明確開啟同一個 project/chat。名冊是專案共用，對話與清單依 chat 分開。切換裝置後先核對專案名稱；已開啟的不同對話可各自保留，不會強迫其他裝置跳走。
+同一個 PWA 入口讀取同一主機資料。「專案管理 → 複製對話連結」會保留 project、chat 與目前 agent，另一台裝置開啟同一位置。名冊是專案共用；不同對話可以各自保留，不強迫其他裝置跳走。版本更新提示可重新載入，草稿保留在該裝置。
 
 舊原生 mod 的索引與背景工作台並非即時雙向同步；日常跨裝置使用同一個 PWA。匯入桌面版只登錄既有資料位置。
 
 ## 更新、移轉與還原
 
 更新此倉庫後先重跑 `node setup.mjs --dry-run`，檢查範圍再安裝。既有設定沿用並備份，不覆寫專案檔案。
+
+`install.mjs` 是舊原生 mod 安裝器；已裝背景工作台時會拒絕覆寫同名啟動器，請使用 `setup.mjs`。新的直接代理對話、任命與協作流程以 PWA 為準。
 
 `--import-desktop` 可登錄本機原生介面的專案與對話位置，保留原位置，不複製憑證。舊專案 runtime 保持相容位置，新專案採分離的私人 runtime。這不是跨電腦帳號搬移工具。
 
@@ -133,10 +152,10 @@ npm test
 
 ## 多代理共用任務清單
 
-多步驟任務由總控先列出工作、負責代理及驗收條件。聊天內顯示「任務清單 · 完成數／總數」，可展開查看內容；不另開協作紀錄頁。未完成項目會保留，接手總控先讀清單，避免漏做或重複派工。
+聊天內顯示「任務清單 · 完成數／總數」，不另開協作紀錄頁。直接代理的每份協作自動列出交付者、接收者、完成條件及驗收證據。等待子協作時，父任務不會因一則「還在等待」答覆而被當成完成。兩個代理同時回報會序列化保存，避免覆蓋其他人的進度。
 
 總控先執行 `herdr-team-runtime checklist` 取得 revision，再以 `request checklist` 提交單一項目，讀取同 ID 的 response 確認成功。每個項目都有 `id`、`title`、`owner`、`acceptance`、`status` 和目前 `revision`。狀態為 pending、in_progress、blocked 或 done；blocked 必須寫 reason。
 
-只有目前總控能更新；版本不符會拒絕寫入。done 必須提供總控的 `verification` 驗收說明，以及 `evidence`：專案內檔案的相對路徑與 SHA-256（type=file），或已成功完成的終端 read 請求 ID 和 response.result JSON 的 SHA-256（type=response）。系統核對來源、完成狀態及雜湊，語意是否符合驗收條件仍由總控負責。queued、啟動成功或代理自稱完成，都不能單獨標記 done。此機制不額外賦予代理檔案或終端權限。
+以上指令只用於舊總控相容清單。新版直接協作由原交付代理負責驗收，必須已有官方 hook 真實回報及真實終端讀取證據，再附驗收說明；提供檔案證據時會檢查專案範圍與 SHA-256。版本不符、尚未回報、外部檔案或錯誤雜湊都會拒絕。語意是否符合目標仍由原交付代理核對，使用者也應查看實際成果。
 
 既有執行中的總控會在下一次收到任務時取得新版協作提示；不會為更新自動送出任務。

@@ -115,3 +115,4 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 }
 
 #retry-start{min-height:44px;flex-shrink:0;font-size:12px}.statusbar:has(#retry-start:not([hidden])){align-items:center;flex-wrap:wrap}
+#send{min-width:44px;min-height:44px}

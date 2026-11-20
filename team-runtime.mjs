@@ -1,4 +1,5 @@
 import {checklist,updateChecklist} from './checklist.mjs';
+import {drainDirect,directReply,drainCollaboration,directTerminal} from './direct.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,17 +14,23 @@ export const defaultRoster = () => [];
 export function coordinatorProfile(c) {return read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json')) || {name:'協調總控'};}
 export function setCoordinatorName(c,name) {
  if(typeof name!=='string'||!name.trim()||name.trim().length>40||/[\x00-\x1f\x7f]/.test(name))throw Error('名稱需為 1–40 字，且不得包含控制字元。');
- const profile={name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;
+ const profile={...coordinatorProfile(c),name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;
 }
-const workerTemplates = {claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn'};
+export function appointAgent(c,agentId){
+ const agent=roster(c).find(a=>a.id===agentId);if(!agent)throw Error('請選擇這個專案已加入的代理。');
+ saveRoster(c,roster(c).map(a=>a.id===agentId?{...a,provider:'claude',model:'claude-opus-5-5',level:'manager'}:a));
+ const profile={...coordinatorProfile(c),agentId:agent.id,name:agent.name,managerModel:'claude-opus-5-5'};save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return{...profile,started:false,providerChanged:agent.provider!=='claude'};
+}
+const workerTemplates = {claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn',antigravity:'herdr-antigravity-task'};
 export function validateRoster(value) {
   if (!Array.isArray(value) || value.length > 24) throw new Error('團隊最多可設定 24 位代理。');
   const ids = new Set();
   return value.map(a => {
-    if (!a || !/^[a-z][a-z0-9-]{0,31}$/.test(a.id || '') || ['claude','codex','minimax','team'].includes(a.id) || ids.has(a.id)) throw new Error('代理識別碼必須唯一，且不能使用供應商名稱。');
+    if (!a || !/^[a-z][a-z0-9-]{0,31}$/.test(a.id || '') || [...Object.keys(workerTemplates),'team'].includes(a.id) || ids.has(a.id)) throw new Error('代理識別碼必須唯一，且不能使用供應商名稱。');
     ids.add(a.id);
     if (!Object.hasOwn(workerTemplates,a.provider) || !['manager','worker'].includes(a.level)) throw new Error('代理引擎或職責無效。');
     const out={id:a.id,provider:a.provider,level:a.level};
+    if(a.model!==undefined){if(a.provider!=='claude'||!Object.hasOwn(claudeModels,a.model))throw Error('此代理模型選擇無效。');out.model=a.model;}
     for (const [key,max] of [['name',40],['group',40],['brief',1000]]) {
       if (typeof (a[key] ?? '') !== 'string' || (key==='name' && !a[key]?.trim()) || (a[key] || '').length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(a[key] || '')) throw new Error('請填寫有效的代理名稱、分組與職責。');
       out[key]=(a[key] || '').trim();
@@ -34,6 +41,7 @@ export function validateRoster(value) {
 export function roster(c) { return validateRoster(read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json')) ?? read(path.join(teamDir(c),'roster.json')) ?? defaultRoster()); }
 export function saveRoster(c,value) {
   const agents=validateRoster(value);save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
+  const profile=coordinatorProfile(c);if(profile.agentId){const selected=agents.find(a=>a.id===profile.agentId);save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),{...profile,agentId:selected?.id||null,...(selected?{name:selected.name}:{})});}
   return {agents,saved:true,started:false};
 }
 export function teamBrief(c) {
@@ -53,12 +61,12 @@ export function routeMessage(text, agents = []) {
     if(!task)throw new Error('請在代理名稱後輸入任務。');
     return {target:agent.id,text:`[Herdr 路由：指定名冊代理 ${agent.name}（${agent.id}），引擎 ${agent.provider}，${agent.level==='manager'?'小組主管':'工作代理'}。總控以 request run 的 agentId=${agent.id} 派工並等待實際回報。職責：${agent.brief}]\n${task}`};
   }
-  const match = original.match(/^@(claude|codex|minimax)(?=\s|[：:，,]|$)[\s：:，,]*/i);
+  const match = original.match(/^@(claude|codex|minimax|antigravity)(?=\s|[：:，,]|$)[\s：:，,]*/i);
   if(custom && !match)throw new Error('找不到這位代理，請先在團隊設定新增。');
   if (!match) return {target:'team', text:original};
   const target = match[1].toLowerCase(), task = original.slice(match[0].length).trim();
   if (!task) throw new Error('請在 @代理名稱 後輸入要處理的內容。');
-  const role = {claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn'}[target];
+  const role = workerTemplates[target];
   return {target, text:`[Herdr 路由：指定 ${target}；單一代理任務。若目前總控就是指定代理，直接處理；否則透過 ${role} 派工並等待真實回報。不能以自己的答案代替。]\n${task}`};
 }
 const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
@@ -71,8 +79,24 @@ function save(file, value) {
   fs.renameSync(tmp, file);
 }
 export function selectedModel(c) {
+  if(c.terminal)try{const id=c.run('hc',['get',c.terminal]).labels?.['team.agent'],agent=roster(c).find(a=>a.id===id);if(agent?.model)return agent.model;}catch{}
   const value = read(path.join(teamDir(c), 'model.json'));
   return claudeModels[value?.model] ? value.model : 'claude-opus-5-5';
+}
+export async function switchAgentModel(c,agentId,model,pause=delay){
+ if(!Object.hasOwn(claudeModels,model))throw Error('只能選擇 Opus 5.5 或 Fable 5.2。');
+ const agents=roster(c),agent=agents.find(a=>a.id===agentId);if(!agent||agent.provider!=='claude')throw Error('只能為 Claude 代理選擇此模型。');
+ const bindings=read(path.join(teamDir(c),'direct-bindings.json'))||{};let terminal;
+ for(const [id,b]of Object.entries(bindings))if(b.agentId===agentId){const t=c.run('hc',['get',id]);if(t.state==='live'&&t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===agentId&&t.labels?.['team.chat']===(c.chat||'legacy'))terminal=t;}
+ if(!terminal){saveRoster(c,agents.map(a=>a.id===agentId?{...a,model}:a));return{model,applied:false,message:'已保存，下一次開啟這位代理時使用 '+claudeModels[model]+'。'};}
+ if(!['idle','done'].includes(terminal.status?.state)||!['claude','claude-code'].includes(terminal.status?.app))throw Error('代理尚未待命，請先處理登入、信任或目前工作。');
+ c.run('hc',['send',terminal.address,`/model ${model}`]);let confirmed=false;
+ for(let i=0;i<32;i++){
+  await pause(250);const screen=c.run('hc',['read',terminal.address,'--json','--lines','0']).text||'',at=screen.lastIndexOf(`/model ${model}`);if(at<0)continue;const current=screen.slice(at+`/model ${model}`.length);
+  if(current.includes('Set model to '+claudeModels[model])){saveRoster(c,agents.map(a=>a.id===agentId?{...a,model}:a));const file=path.join(teamDir(c),'agent-models.json');save(file,{...(read(file)||{}),[agentId]:{model,terminal:terminal.address,confirmedAt:new Date().toISOString()}});return{model,applied:true,message:'已確認切換為 '+claudeModels[model]+'。'};}
+  if(!confirmed&&current.includes('Switch model?')&&current.includes(`❯ 1. Yes, switch to ${claudeModels[model]}`)&&/2\. No, go back\s*$/.test(current)){c.run('hc',['keys',terminal.address,'enter']);confirmed=true;}
+ }
+ throw Error('CLI 尚未確認模型切換成功，請查看主機終端；未標記套用成功。');
 }
 export async function switchModel(c, model, pause = delay) {
   if (!Object.hasOwn(claudeModels, model)) throw new Error('只能選擇 Opus 5.5 或 Fable 5.2。');
@@ -216,12 +240,17 @@ export function drainChats(c) {
   }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
 export function drainProject(c) {
-  return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,...drain(x),chatQueue:drainChats(x)}));
+  return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,...drain(x),directQueue:drainDirect(x),collaborationQueue:drainCollaboration(x),chatQueue:drainChats(x)}));
 }
 export function captureReply(event, c, role) {
   const isClaude = role === 'Claude' && event.hook_event_name === 'Stop';
-  const isCodex = role === 'Codex' && event.type === 'agent-turn-complete';
+  const isCodex = ['Codex','Antigravity','MiniMax'].includes(role) && event.type === 'agent-turn-complete';
   if (!isClaude && !isCodex) return {captured: false};
+  if(role==='Codex'&&titleMetadata(event['last-assistant-message']))return{captured:false,reason:'session_title_metadata'};
+  let observedModel=event.modelName||event.model;
+  if(role==='Codex'&&!observedModel&&directTerminal(c,c.terminal))try{const screen=c.run('hc',['read',c.terminal,'--json','--lines','0']).text||'';observedModel=screen.split('\n').slice(-8).flatMap(line=>{const match=line.match(/^\s*(GPT-[A-Za-z0-9.-]+)\s+(?:low|medium|high|xhigh|max)\s*[·|]/);return match?[match[1]]:[];}).at(-1);}catch{}
+  const direct=directReply(c,isClaude?event.last_assistant_message:event['last-assistant-message'],String(event['turn-id']||event.session_id||''),observedModel);
+  if(direct.captured||direct.reason)return direct;
   const control = read(path.join(teamDir(c), 'control.json'));
   if (control?.terminal && control.terminal !== c.terminal) return captureWorkerReply(event,c,role,control);
   const text = isClaude ? event.last_assistant_message : event['last-assistant-message'];
@@ -230,27 +259,31 @@ export function captureReply(event, c, role) {
   log(c, role, text, 'reply');
   return {captured:true};
 }
+function titleMetadata(text) {
+ try {const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===1&&typeof value.title==='string';}catch{return false;}
+}
 function captureWorkerReply(event,c,role,control) {
- if(role!=='Codex'||event.type!=='agent-turn-complete'||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
+ if(!['Codex','Antigravity','MiniMax'].includes(role)||event.type!=='agent-turn-complete'||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
  const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{},binding=bindings[c.terminal];
  if(!binding||binding.owner!==control.terminal||binding.chat!==(c.chat||'legacy'))return{captured:false,reason:'unregistered_worker'};
  const worker=c.run('hc',['get',c.terminal]);
  if(worker.parent!==control.terminal||worker.labels?.['team.owner']!==control.terminal||worker.labels?.['team.chat']!==(c.chat||'legacy'))return{captured:false,reason:'foreign_worker'};
  const text=event['last-assistant-message'];if(typeof text!=='string'||!text.trim())return{captured:false};
+ if(titleMetadata(text))return{captured:false,reason:'session_title_metadata'};
  const hash=createHash('sha256').update(String(event['turn-id']??worker.turn??'')+'\n'+text).digest('hex');
  if(binding.captureHash===hash)return{captured:false,reason:'duplicate'};
  let explicit=false;
- try{explicit=fs.readFileSync(path.join(teamDir(c),'messages.jsonl'),'utf8').trim().split('\n').slice(-200).some(line=>{const e=JSON.parse(line);return e.terminal===c.terminal&&e.kind==='worker-report'&&Date.parse(e.time)>=binding.sentAt;});}catch{}
+ try{explicit=fs.readFileSync(path.join(teamDir(c),'messages.jsonl'),'utf8').trim().split('\n').slice(-200).some(line=>{const e=JSON.parse(line);return e.terminal===c.terminal&&e.kind==='worker-report'&&!['codex-notify','antigravity-stop','minimax-stop'].includes(e.via)&&!titleMetadata(e.text)&&Date.parse(e.time)>=binding.sentAt;});}catch{}
  if(explicit){binding.captureHash=hash;save(file,bindings);return{captured:false,reason:'explicit_report_already_sent'};}
- const result=report(c,control.terminal,binding.name||'Codex',text);binding.captureHash=hash;save(file,bindings);return {captured:true,...result};
+ const result=report(c,control.terminal,binding.name||role,text,{via:{Codex:'codex-notify',Antigravity:'antigravity-stop',MiniMax:'minimax-stop'}[role]});binding.captureHash=hash;save(file,bindings);return {captured:true,...result};
 }
-export function report(c, target, role, text) {
+export function report(c, target, role, text, metadata={}) {
   if (!/^t[a-z0-9]+$/.test(target || '')) throw new Error('A local coordinator terminal ID is required.');
   const p = paths(c), dir = path.join(p.dir, 'outbox');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const id = randomUUID();
   save(path.join(dir, `${id}.json`), { id, target, role, text: String(text), from: c.terminal || null });
-  log(c, role, text, 'worker-report', {reportId:id});
+  log(c, role, text, 'worker-report', {...metadata,reportId:id});
   return { queued: true, id };
 }
 export function drain(c) {
@@ -447,6 +480,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       result = captureReply(event, context(event.cwd || process.cwd()), 'Codex');
     } else if (cmd === 'model-id') { process.stdout.write(selectedModel(context()) + '\n'); result = null; }
     else if (cmd === 'switch-model') result = await switchModel(context(), args[0]);
+    else if (cmd === 'direct-report') result = directReply(context(),args[0],String(Date.now()));
     else if (cmd === 'checklist') result = checklist(context());
     else if (cmd === 'coordinator') result = args[0]==='set' ? setCoordinatorName(context(),args[1]) : coordinatorProfile(context());
     else if (cmd === 'roster') result = args[0]==='set' ? saveRoster(context(),JSON.parse(args[1]||'null')) : {agents:roster(context())};

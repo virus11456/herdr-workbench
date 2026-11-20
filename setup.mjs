@@ -26,9 +26,17 @@ export function deploymentPlan(input,tools){
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['team-runtime.mjs','background.mjs','storage.mjs','checklist.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['team-runtime.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
+ try{existingHooks=JSON.parse(fs.readFileSync(agyHooks,'utf8'));if(!existingHooks||typeof existingHooks!=='object'||Array.isArray(existingHooks))throw Error('Invalid hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
+ add(agyHooks,JSON.stringify({...existingHooks,'herdr-workbench-reply':{Stop:[{type:'command',command:quote(tools.node)+' '+quote(path.join(home,'agy-reply.mjs')),timeout:10}]}},null,2)+'\n');
+ const minimaxHooks=input.minimaxHooks||path.join(os.homedir(),'.minimax/hooks.json');let previousMinimax={enabled:true,hooks:{}};
+ try{previousMinimax=JSON.parse(fs.readFileSync(minimaxHooks,'utf8'));if(!previousMinimax||typeof previousMinimax!=='object'||Array.isArray(previousMinimax))throw Error('Invalid MiniMax hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
+ const stop=(previousMinimax.hooks?.Stop||[]).map(group=>({...group,hooks:(group.hooks||[]).filter(hook=>hook.name!=='Herdr reply')})).filter(group=>group.hooks.length);
+ stop.push({hooks:[{type:'command',name:'Herdr reply',command:quote(tools.node)+' '+quote(path.join(home,'minimax-reply.mjs')),timeout:10}]});
+ add(minimaxHooks,JSON.stringify({...previousMinimax,hooks:{...previousMinimax.hooks,Stop:stop}},null,2)+'\n');
  const replacements={'@NODE_SHELL@':quote(tools.node),'@NOTIFY_CONFIG@':quote('notify='+JSON.stringify([tools.node,path.join(home,'team-runtime.mjs'),'codex-notify']))};
- for(const name of ['runtime','lead','backup','claude','codex','minimax']){
+ for(const name of ['runtime','lead','backup','claude','codex','minimax','antigravity']){
   let text=fs.readFileSync(path.join(source,'bin/herdr-team-'+name),'utf8');
   for(const [key,value]of Object.entries(replacements))text=text.replaceAll(key,value);
   // The original paths occur inside double quoted shell strings.
@@ -36,7 +44,7 @@ export function deploymentPlan(input,tools){
   text=text.replaceAll('$HOME/.config/herdr-app',escaped).replace('set -eu','set -eu\nexport HERDR_WORKBENCH_HOME='+quote(home));
   add(path.join(bin,'herdr-team-'+name),text,0o755);
  }
- for(const [name,marker,command]of [['herdr-claude-task','@CLAUDE_COMMAND@','herdr-team-claude'],['herdr-codex-implement','@CODEX_COMMAND@','herdr-team-codex'],['herdr-minimax-cn','@MINIMAX_COMMAND@','herdr-team-minimax']]){
+ for(const [name,marker,command]of [['herdr-claude-task','@CLAUDE_COMMAND@','herdr-team-claude'],['herdr-codex-implement','@CODEX_COMMAND@','herdr-team-codex'],['herdr-minimax-cn','@MINIMAX_COMMAND@','herdr-team-minimax'],['herdr-antigravity-task','@ANTIGRAVITY_COMMAND@','herdr-team-antigravity']]){
   add(path.join(core,'templates',name+'.md'),fs.readFileSync(path.join(source,'templates',name+'.md'),'utf8').replaceAll(marker,quote(path.join(bin,command))));
  }
  for(const name of ['server.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
@@ -87,7 +95,7 @@ async function main(){
   for(const [file,key]of [[path.join(existingHome,'web/projects.json'),null],[path.join(old,'shared.json'),'team-chat.projects'],[path.join(old,'web/projects.json'),null]]){try{const data=JSON.parse(fs.readFileSync(file));groups.push(key?data[key]||[]:data);}catch(e){if(e.code!=='ENOENT')throw e;}}
   input.projects=mergeProjects(groups);input.legacyProjects=[...new Set([...(previous?.legacyProjects||[]),...groups.slice(1).flatMap(list=>list.map(p=>fs.realpathSync(p.folder)))])];
  }
- const tools={node:process.execPath,...Object.fromEntries(['hc','claude','codex','mcode'].map(name=>[name,findTool(name)]))};
+ const tools={node:process.execPath,...Object.fromEntries(['hc','claude','codex','mcode','agy'].map(name=>[name,findTool(name)]))};
  const plan=deploymentPlan(input,tools);console.log(JSON.stringify({mode:'background',files:plan.files.map(f=>f.target),links:plan.links,projects:input.projects?.length||0,drive:plan.config.driveRoot?'configured':'needs_login',launchAgents:plan.agents.map(a=>a.label)},null,2));
  if(flags.has('--dry-run')){console.log('Dry run：未寫入檔案、未啟動代理、未修改 Tailscale。');return;}
  if(flags.has('--confirm')){if(!process.stdin.isTTY)throw Error('請在主機互動式終端確認安裝。');const ui=createInterface({input:process.stdin,output:process.stdout});let answer;try{answer=await ui.question('依上列範圍備份並安裝？[y/N] ');}finally{ui.close();}if(!/^[yY]$/.test(answer.trim())){console.log('已取消，未安裝。');return;}}

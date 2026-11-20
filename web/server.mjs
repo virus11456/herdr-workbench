@@ -1,4 +1,5 @@
 import {checklist} from '../checklist.mjs';
+import {enqueueDirect,retryDirect} from '../direct.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -6,9 +7,9 @@ import path from 'node:path';
 import os from 'node:os';
 import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {execFile} from 'node:child_process';
+import {execFile,execFileSync} from 'node:child_process';
 import {promisify} from 'node:util';
-import {context,roster,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName,retryStartup} from '../team-runtime.mjs';
+import {context,roster,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName,retryStartup,switchAgentModel,appointAgent,switchModel,selectedModel} from '../team-runtime.mjs';
 const exec=promisify(execFile);
 const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
@@ -54,11 +55,11 @@ export function createServer(config) {
     const {stdout}=await exec(path.join(os.homedir(),'.local/bin/hc'),args,{timeout:4000,maxBuffer:1024*1024});return JSON.parse(stdout);
   };
   const state=async url=>{
-    const list=projects();const summary=list.map(p=>{let profile={name:'協調總控'},agents=[],available=true;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,agents,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
-    if(!list.length)return {projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
+    const list=projects();const summary=list.map(p=>{let profile={name:'協調總控'},agents=[],available=true;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
+    if(!list.length)return {uiBuild:'20261120-direct14',appVersion:'0.2.0-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
     const picked=summary.find(p=>p.id===choice.p.id);
-    if(picked&&!picked.available)return{projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    if(picked&&!picked.available)return{uiBuild:'20261120-direct14',appVersion:'0.2.0-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -71,9 +72,15 @@ export function createServer(config) {
         terminals.push(...workers.filter(t=>t.parent===control.terminal));
       }catch{coreError='目前無法取得代理終端狀態。';}
     }
+    const direct=read(path.join(c.teamDir,'direct-bindings.json'),{});
+    for(const [id,binding]of Object.entries(direct))try{const t=await core(['get',id]);if(binding.chat===chat&&t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===binding.agentId&&t.labels?.['team.chat']===chat)terminals.push(t);}catch{}
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
-    return {projects:summary,project:p.id,chat,agents:roster(c),coordinatorName:coordinatorProfile(c).name,coordinatorReady:!!terminals[0]?.status?.app,startupStopped:terminals[0]?.state==='finished'&&!terminals[0]?.status?.app,checklist:checklist(c),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
-      terminals:terminals.map(t=>({address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,agentId:t.labels?.['team.agent']||null})),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    const directQueue=path.join(c.teamDir,'direct-queue'),pendingAgents=fs.existsSync(directQueue)?[...new Set(fs.readdirSync(directQueue).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>read(path.join(directQueue,n))?.agentId).filter(Boolean))]:[];
+    const owner=terminals.find(t=>t.address===control?.terminal),stoppedAgents=roster(c).filter(a=>{const t=terminals.filter(t=>t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===a.id).at(-1),b=t&&direct[t.address];return t?.state==='finished'&&b&&!b.retired&&!b.retryRequested&&!b.delivered&&!b.captureHash;}).map(a=>a.id);
+    const taskList=checklist(c),jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c);taskList.items.push(...jobs.map(j=>({id:j.id,title:(members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent)+' → '+(members.find(a=>a.id===j.targetAgent)?.name||j.targetAgent),owner:members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent,acceptance:j.acceptance,status:j.status==='done'?'done':j.status==='queued'?'pending':'in_progress',verification:j.verification,evidence:j.evidence||[]})));
+    const ownerModel=read(path.join(c.teamDir,'model.json')),ownerArgs=owner?.foreground?.argv||owner?.argv||[],modelAt=ownerArgs.indexOf('--model');
+    return {uiBuild:'20261120-direct14',appVersion:'0.2.0-dev',projects:summary,project:p.id,chat,agents:roster(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,startupStopped:owner?.state==='finished'&&!owner?.status?.app,checklist:taskList,messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+      terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&j.status!=='done'),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   return http.createServer(async(req,res)=>{
@@ -107,14 +114,23 @@ export function createServer(config) {
           const folder=path.join(fs.realpathSync(parent),slug+'-'+randomBytes(4).toString('hex'));
           fs.mkdirSync(folder,{mode:0o700});
           const chat='web-'+Date.now().toString(36)+'-'+randomBytes(4).toString('hex');
-          const project={folder,name:data.name.trim(),chats:[{id:chat,title:'新對話',createdAt:Date.now()}]};
-          saveRoster(ctx(folder,null),[]);records.push(project);write(projectFile,records);
+          const project={folder,name:data.name.trim(),agentWorkspace:true,chats:[{id:chat,title:'新對話',createdAt:Date.now()}]};
+          saveRoster(ctx(folder,null),[{id:'starter',name:'我的助手',provider:'claude',level:'worker',model:'claude-opus-5-5'}]);records.push(project);write(projectFile,records);
           write(path.join(home,'team-chat.json'),{folder,name:project.name,chatId:chat,requestId:randomUUID()});
           rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/model'){json(200,await switchModel(c,data.model));return;}
+        if(route==='/api/agent-model'){json(200,await switchAgentModel({...c,run:(_cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin/hc'),args,{encoding:'utf8',cwd:c.cwd,timeout:15000}))},data.agentId,data.model));return;}
+        if(route==='/api/project-name'){
+          if(typeof data.name!=='string'||!data.name.trim()||data.name.length>80||/[\x00-\x1f]/.test(data.name))throw failure('請填寫有效的專案名稱（最多 80 字）。');
+          const records=read(projectFile,[]),index=records.findIndex(item=>item.folder===p.folder);if(index<0)throw failure('請先匯入此專案後再改名。');
+          records[index]={...records[index],name:data.name.trim()};write(projectFile,records);json(200,{project:p.id,name:data.name.trim()});return;
+        }
+        if(route==='/api/retry-agent'){json(200,retryDirect(c,data.agentId));return;}
         if(route==='/api/retry-start'){json(200,await retryStartup({...c,run:(_cmd,args)=>core(args)}));return;}
         if(route==='/api/select'){rememberSelection(p,chat);json(200,{project:p.id,chat});return;}
+        if(route==='/api/appoint'){const selected=roster(c).find(a=>a.id===data.agentId);let modelResult;if(selected?.provider==='claude')modelResult=await switchAgentModel(c,data.agentId,'claude-opus-5-5');json(200,{...appointAgent(c,data.agentId),modelApplied:modelResult?.applied||false});return;}
         if(route==='/api/coordinator'){json(200,setCoordinatorName(c,data.name));return;}
         if(route==='/api/message'){
           if(typeof data.text!=='string'||!data.text.trim()||data.text.length>12000)throw failure('請填寫任務（最多 12000 字）。');
@@ -122,7 +138,9 @@ export function createServer(config) {
           const key=p.id+':'+chat+':'+data.id;
           if(lastMessages.has(key)){json(200,lastMessages.get(key));return;}
           // Queue through the existing runtime. This endpoint cannot invoke arbitrary CLI commands.
-          const result=enqueueChat(c,data.text,data.id);rememberSelection(p,chat);lastMessages.set(key,result);
+          const mentioned=roster(c).flatMap(a=>[a.id,a.name].map(alias=>({a,prefix:'@'+alias}))).sort((a,b)=>b.prefix.length-a.prefix.length).find(x=>data.text.startsWith(x.prefix)&&/^[\s：:，,]/.test(data.text.slice(x.prefix.length,x.prefix.length+1)));
+          const recipient=mentioned?.a.id||data.agentId,text=mentioned?data.text.slice(mentioned.prefix.length).replace(/^[\s：:，,]+/,''):data.text;
+          const result=recipient?enqueueDirect(c,recipient,text,data.id):enqueueChat(c,text,data.id);rememberSelection(p,chat);lastMessages.set(key,result);
           if(lastMessages.size>1000)lastMessages.delete(lastMessages.keys().next().value);
           json(200,result);return;
         }

@@ -1,4 +1,8 @@
 #!/bin/sh
 set -eu
 export PATH="$HOME/.local/bin:$PATH"
+if [ -n "${HC_TERMINAL_ID:-}" ]; then
+  HERDR_TEAM_CHAT_ID=$("$HOME/.local/bin/hc" get "$HC_TERMINAL_ID" | @NODE_SHELL@ -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{const chat=JSON.parse(s).labels?.["team.chat"];process.stdout.write(chat&&chat!=="legacy"?chat:"");});')
+  export HERDR_TEAM_CHAT_ID
+fi
 exec "$HOME/.local/bin/mcode" "$@"
