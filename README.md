@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.1-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.1-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.1-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.2-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.2-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.2-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 

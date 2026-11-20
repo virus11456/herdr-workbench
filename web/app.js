@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-engine30';
+const UI_BUILD='20261120-version31';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -234,6 +234,7 @@ function renderTasks(){
  }
 }
 function render(){
+ $('workbench-version').textContent=state.appVersion?'版本 '+state.appVersion:'版本待確認';
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -459,7 +460,7 @@ function openTeam(){
 
  const p=state?.projects.find(p=>p.id===selection.project);$('team-project-name').textContent=p?.name||'請先建立專案';
  const list=$('team-member-list');list.replaceChildren();
- if(!state.agentWorkspace){const director=el('div','team-row');director.append(avatar('claude'),el('span','',state.coordinatorName||'領頭羊'));const rename=el('button','','改名');rename.onclick=()=>{$('team-dialog').close();editAgent({id:'__coordinator__',name:state.coordinatorName||'領頭羊'});};list.append(director);}
+ if(!state?.agentWorkspace){const director=el('div','team-row');director.append(avatar('claude'),el('span','',state?.coordinatorName||'領頭羊'));const rename=el('button','','改名');rename.onclick=()=>{$('team-dialog').close();editAgent({id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});};list.append(director);}
  for(const a of state?.agents||[]){const row=el('div','team-row');row.append(avatar(a.provider),el('span','',a.name));const b=el('button','','設定');b.onclick=()=>{$('team-dialog').close();editAgent(a);};list.append(row);}
  $('team-add').disabled=!p;$('team-history').disabled=!p;$('team-dialog').showModal();
 }
