@@ -1,11 +1,10 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
-import {createPasture} from './pasture.mjs';
-import {flock,attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
+import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-pixel24';
+const UI_BUILD='20261120-chat25';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -14,7 +13,7 @@ const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-hei
 const initialQuery=new URLSearchParams(location.search);
 let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,historyVisible=false,editing=null,posting=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
-let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',pastureSnapshot='',attentionSnapshot='';
+let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',attentionSnapshot='';
 function hydrateSheep(wrap){
  if(!sheepSource)return;
  const svg=sheepSource.cloneNode(true);svg.classList.add('sheep-character');svg.setAttribute('aria-hidden','true');wrap.replaceChildren(svg);
@@ -56,7 +55,7 @@ const status=t=>!t?'可開始對話':t.state==='finished'?'已結束':t.parked?'
 const agentStatus=(a,t)=>!t&&state?.pendingAgents?.includes(a.id)?'啟動中':status(t);
 const activityFor=(a,t)=>agentActivity(t,{pending:!!a&&state?.pendingAgents?.includes(a.id),starting:!a&&state?.control?.phase==='starting'});
 function animateSheep(node,activity){node.classList.toggle('is-starting',activity==='starting');node.classList.toggle('is-working',activity==='working');}
-let progressSnapshot='',conversationViewKey='';
+let progressSnapshot='';
 function renderReplyProgress(){
  const agent=currentAgent(),terminal=agent?terminalFor(agent):state?.terminals.find(t=>t.address===state.control?.terminal),name=agent?.name||state?.coordinatorName||'領頭羊';
  const progress=historyVisible?null:replyProgress({messages:state?.messages,agentId:agent?.id||null,terminal,name,posting,stopped:agent?state?.stoppedAgents?.includes(agent.id):state?.startupStopped});
@@ -124,13 +123,6 @@ function renderNav(){
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
 }
-let pastureScene=null;
-function renderPasture(){
- const sheep=flock(state),key=JSON.stringify([selection,selectedAgent,sheep]);$('pasture').hidden=historyVisible;
- const counts={working:sheep.filter(a=>['working','starting'].includes(a.phase)).length,blocked:sheep.filter(a=>a.phase==='blocked').length,ready:sheep.filter(a=>a.phase==='ready').length};
- $('pasture-counts').textContent=counts.blocked?counts.blocked+' 等你確認':counts.working?counts.working+' 工作中':counts.ready+' 已連線';
- if(key===pastureSnapshot)return;pastureSnapshot=key;pastureScene??=createPasture($('pasture-flock'),{onSelect:id=>switchAgent(id,false)});pastureScene.update(sheep,selectedAgent);
-}
 function renderAttention(){
  const items=attentionItems(state),key=JSON.stringify([selection,items]);$('attention-panel').hidden=historyVisible||!items.length;
  if(key===attentionSnapshot)return;attentionSnapshot=key;$('attention-items').replaceChildren();
@@ -159,7 +151,7 @@ function render(){
  if(!agent&&state.coordinatorParked&&!state.coreError&&state.appOpen)$('status').textContent='領頭羊待命，收到訊息後續接會話';
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+(state.agentWorkspace?0:1)} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
- renderPasture();renderAttention();renderTasks();
+ renderAttention();renderTasks();
  const all=state.messages||[],deliveries={};for(const e of all)if(e.kind==='delivery')deliveries[e.messageId]=e.delivery;
  const messages=all.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment')&&(details||!agent||m.role===agent.name||m.agentId===agent.id||m.target===agent.id||(live&&m.terminal===live.address)));
  $('welcome').hidden=historyVisible||messages.length>0;$('messages').hidden=historyVisible;$('history-panel').hidden=!historyVisible;document.querySelector('.compose-wrap').hidden=historyVisible;
@@ -167,7 +159,6 @@ function render(){
  $('welcome-description').textContent=agent?agent.brief:'先和協調總控聊聊目標，其他夥伴需要時再加入。';
  const welcomeHeading=$('welcome').querySelector('h2');welcomeHeading.replaceChildren();welcomeHeading.textContent=agent?`交給${agent.name}的下一件事`:'今天，想和羊群完成什麼？';
  const stamp=JSON.stringify([selection,selectedAgent,details,historyVisible,state.coordinatorName,state.agents.map(a=>[a.id,a.name]),state.messagesRevision??messages]);
- const viewKey=JSON.stringify([selection.project,selection.chat]),openingConversation=viewKey!==conversationViewKey;conversationViewKey=viewKey;
  const container=$('messages'),wasBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<100;
  if(stamp!==messageSnapshot){messageSnapshot=stamp;container.replaceChildren();
  if(details){container.append(el('div','details-note','這個專案自行設定成員與職責，沒有固定部門或工作順序。每位代理都能直接對話，並在你授權後交付協作與驗收。角色設定不代表已啟動，queued 只代表排入等待。'));}
@@ -179,7 +170,7 @@ function render(){
   if(m.time){const time=el('time','message-time',new Date(m.time).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}));role.append(time);}
   bubble.append(role,formatMessage(document,m.text||''));row.append(bubble);if(user)row.append(avatar(null,true));container.append(row);
  }
- if(!openingConversation&&wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;}renderReplyProgress();if(!openingConversation&&wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;if(openingConversation)$('feed').scrollTop=0;updateSend();
+ if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;}renderReplyProgress();if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;updateSend();
 }
 const suggestions=[['釐清目標','先一起想清楚要做什麼','請先協助我釐清這個專案的目標與限制：'],['開始協作','依任務安排適合的成員','請依這個專案已加入的代理與職責，協助以下目標：'],['核對成果','需要時再安排交叉檢查','請檢查以下成果，依需要安排已加入的代理交叉驗證：'],['整理資訊','把零散內容整理清楚','請協助整理以下內容，保留重點、待辦與需要確認的問題：']];
 for(const [title,sub,prompt]of suggestions){const b=el('button','suggestion');b.type='button';b.append(el('strong','',title),el('small','',sub));b.onclick=()=>{$('draft').value=prompt;persistDraft();updateSend();$('draft').focus();};$('suggestions').append(b);}
@@ -299,7 +290,6 @@ document.addEventListener('keydown',e=>{if(!menuContext)return;if(e.key==='Escap
 $('members').addEventListener('scroll',()=>closeAgentMenu(false),{passive:true});window.addEventListener('resize',()=>closeAgentMenu(false),{passive:true});
 
 $('permission-close').onclick=()=>$('permission-dialog').close();
-$('pasture').addEventListener('toggle',()=>{try{localStorage.setItem('herdr-pasture-open',String($('pasture').open));}catch{}});try{if(localStorage.getItem('herdr-pasture-open')==='false')$('pasture').open=false;}catch{}
 let notificationSub=null;
 async function notificationStatus(){
  const supported='Notification' in window&&'serviceWorker' in navigator&&'PushManager' in window;
@@ -316,7 +306,5 @@ $('enable-notifications').onclick=async()=>{
 };
 $('disable-notifications').onclick=async()=>{try{if(notificationSub){await api('notifications',{action:'unsubscribe',endpoint:notificationSub.endpoint});await notificationSub.unsubscribe();notificationSub=null;}await notificationStatus();}catch{$('notification-status').textContent='關閉通知失敗，請重試。';}};
 $('test-notifications').onclick=async()=>{const b=$('test-notifications');b.disabled=true;try{await api('notifications',{action:'test',endpoint:notificationSub?.endpoint});$('notification-status').textContent='通知服務已接受測試；請確認裝置有實際收到，這還不代表送達。';}catch{$('notification-status').textContent='測試通知未送出，請檢查通知設定與主機連線。';}finally{b.disabled=false;}};
-$('manage-team').addEventListener('click',()=>{$('settings-pasture').checked=$('pasture').open;notificationStatus();});
-$('settings-pasture').onchange=()=>$('pasture').open=$('settings-pasture').checked;
+$('manage-team').addEventListener('click',()=>notificationStatus());
 
-$('show-pasture').onclick=()=>{historyVisible=false;render();$('pasture').open=true;$('pasture').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});$('pasture').querySelector('summary').focus({preventScroll:true});};

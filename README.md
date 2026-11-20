@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.5.0-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.5.0-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.5.0-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.5.1-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.5.1-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.5.1-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -131,22 +131,13 @@ npm test
 
 自動測試使用隔離目錄、模擬 core 及真正的隔離 Node 子程序，不花模型額度。已另做四引擎直接回覆、Opus／Fable 真切換、Opus 向 Codex 交付後退回修正並驗收、Drive 原始檔雲端回讀；實機與新機限制均獨立記錄，不用單元測試代替。
 
-## 羊群牧場、任務進度與提醒
+## 任務進度與提醒
 
-每個專案名稱旁顯示代理總數，所有專案的羊都列在側欄。其他專案尚未查詢的執行狀態顯示「切換查看狀態」，不誤報連線。上方「牧場」按鈕可隨時回到視覺狀態區。
+0.5.1 已移除 8-bit 牧場、地圖入口與顯示設定，回到以聊天為主的介面。所有專案的代理數、名單、排序與 Pin 保留；側欄原有綿羊頭像和工作提示也保留。
 
-「羊群牧場」優先排在內容最上方，位於歡迎訊息、確認提醒與任務卡之前。打開或切換對話時先顯示頂部；閱讀對話後，新訊息仍依原本的跟隨方式處理。
+「任務進度」顯示排隊、送達、工作、回覆、待驗收與已驗收；排隊不算完成，收到回覆也不代表成果通過驗收。「需要你確認」提供對應代理與真實主機終端的處理方式，權限仍由你親自決定。
 
-牧場改為 8-bit 像素地圖與 SVG 像素羊，羊會在草地上真正移動、轉向與踏步，不使用代理卡片。工作中快跑、待命慢走；等待確認、錯誤與離線停留。走動是視覺狀態，不代表自動開始任務。滑鼠停在羊上或鍵盤聚焦會暫停移動，方便點選；收合、離開畫面或開啟系統「減少動態效果」時停止。側欄及聊天原有羊頭像保留。
-
-對話上方的「羊群牧場」呈現這段對話的真實代理狀態；可以收合，並在此裝置記住選擇。點羊只切換對話，不會啟動任務，也不會在手機自動叫出鍵盤。
-
-- 綠點：真實 CLI 已連線；工作時羊快跑、綠點閃爍，待命時慢走、綠點恆亮。
-- 灰點：未連線或已停止；收到訊息後才啟動。等待登入／信任／權限時顯示「!」與文字提醒，停止工作動畫。
-- 「任務進度」整合這段對話的訊息、共用清單及協作。排隊不算送達，收到回覆不算驗收；協作只有經既有驗收機制核對後才顯示「已驗收」。展開卡片可看負責者、驗收條件與結果。
-- 「需要你確認」會顯示對應代理及真實終端的處理方式。登入、信任及工具權限仍由你在主機親自決定。
-
-![8-bit 像素牧場，教學測試資料](docs/images/13-pixel-pasture-demo.png)
+![聊天與任務進度，教學測試資料](docs/images/15-chat-tasks-demo.png)
 
 ### 手機背景通知
 
@@ -160,7 +151,7 @@ npm test
 
 VAPID 私鑰與裝置訂閱只保存在主機本機 `notifications/`，不在 Drive、GitHub 或安裝包內。安裝器使用鎖定版本的 `npm ci --omit=dev --ignore-scripts` 安裝 web-push 依賴；需要 Node.js 隨附的 npm 及網路。沒有預設替使用者開啟通知。
 
-參考：[Agent Village 設計與實作](https://github.com/JacobAtchley/herdr-addons/tree/main/agent-village)。本版借鑑「狀態對應角色、點角色切換」的概念，使用自行繪製的 SVG 牧場與原有綿羊，不載入對方原生 gpui-kit mod，不改寫你保存的排序與 Pin。推播依據 [WebKit 官方說明](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/) 與 [web-push 官方函式庫](https://github.com/web-push-libs/web-push)。
+推播依據 [WebKit 官方說明](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/) 與 [web-push 官方函式庫](https://github.com/web-push-libs/web-push)。
 
 ## 跨裝置同步
 

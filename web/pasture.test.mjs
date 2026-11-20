@@ -1,3 +1,0 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {moveToward,canRoam} from './pasture.mjs';
-test('walking uses elapsed time, reaches its target without overshooting, and preserves input coordinates',()=>{const p={x:0,y:0},q={x:3,y:4};assert.deepEqual(moveToward(p,q,1,2.5),{x:1.5,y:2});assert.deepEqual(moveToward(p,q,10,2.5),q);assert.deepEqual(moveToward(p,q,-1,2.5),p);assert.deepEqual(moveToward(p,p,1,2),p);assert.deepEqual(p,{x:0,y:0});});
-test('blocked, error and disconnected agents never roam as though working',()=>{for(const state of ['blocked','error','offline'])assert.equal(canRoam(state),false);assert.equal(canRoam('working'),true);assert.equal(canRoam('ready'),true);});
