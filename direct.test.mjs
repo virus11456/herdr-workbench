@@ -29,6 +29,7 @@ for(const direct of [false,true])test(`only the ${direct?'appointed':'legacy'} l
  fs.mkdirSync(c.teamDir,{recursive:true});
  if(direct){
   assert.throws(()=>enqueueDirect(c,'engineer','No authorization for worker',messageId,true),/領頭羊/);
+  saveRoster(c,roster(c).map(agent=>({...agent,provider:'claude'})));
   appointAgent(c,'engineer');
   fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[leader]:{agentId:'engineer',provider:'claude',chat:c.chat}}));
  }else fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:leader}));
@@ -86,8 +87,9 @@ test('agents delegate in each other conversations, reject queued acceptance, rev
  assert.equal(collaborate(c,{action:'accept',id:queued.id,revision:job().revision,verification:'Verified terminal report and result.txt equal 42',evidence:[{path:'result.txt',sha256}]}).done,true);assert.equal(job().status,'done');
  assert.throws(()=>collaborate({...c,terminal:'tunitforeign'},{action:'delegate',agentId:'reviewer',task:'x',acceptance:'x'}),/registered/);
 });
-test('appointment preserves the chosen agent identity and defaults managers to Opus; model switches require a real CLI confirmation',async t=>{
- const {c}=fixture(t);appointAgent(c,'engineer');assert.equal(roster(c)[0].provider,'claude');assert.equal(roster(c)[0].model,'claude-opus-5-5');assert.equal(roster(c)[0].level,'manager');
+test('appointment preserves the selected engine; Claude model switches require a real CLI confirmation',async t=>{
+ const {c}=fixture(t);const codex=appointAgent(c,'engineer');assert.equal(codex.provider,'codex');assert.equal(roster(c)[0].provider,'codex');assert.equal(roster(c)[0].model,undefined);
+ saveRoster(c,roster(c).map(agent=>({...agent,provider:'claude'})));const claude=appointAgent(c,'engineer');assert.equal(claude.provider,'claude');assert.equal(roster(c)[0].model,'claude-opus-5-5');assert.equal(roster(c)[0].level,'manager');
  fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({tunitdirect:{agentId:'engineer',chat:c.chat}}));let confirm=true;const calls=[];
  c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='get')return{address:args[1],cwd:c.cwd,parent:null,state:'live',status:{app:'claude-code',state:'idle'},labels:{'team.direct':'true','team.agent':'engineer','team.chat':c.chat}};if(args[0]==='send')return{ok:true};if(args[0]==='read')return{text:confirm?'/model claude-fable-5-2\nSet model to Fable 5.2':'Permission confirmation required'};throw Error('No unexpected keys or real operation');};
  assert.equal((await switchAgentModel(c,'engineer','claude-fable-5-2',async()=>{})).applied,true);assert.equal(roster(c)[0].model,'claude-fable-5-2');confirm=false;

@@ -13,6 +13,7 @@ export const recoverable = new Set(['rate_limit', 'server_error', 'authenticatio
 export const claudeModels = {'claude-opus-5-5':'Opus 5.5', 'claude-fable-5-2':'Fable 5.2'};
 export const defaultRoster = () => [];
 export function coordinatorProfile(c) {return read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json')) || {name:'領頭羊'};}
+export function coordinatorProvider(c){return coordinatorProfile(c).provider==='codex'?'codex':'claude';}
 export function canCreateAgent(c, agentId) {
   if(!c.privateState)return false;
   const appointed=coordinatorProfile(c).agentId;
@@ -22,15 +23,17 @@ export function canCreateAgent(c, agentId) {
 export function missingTerminal(error) {
  try{return (error?.error?.kind||JSON.parse(String(error?.stdout||error?.stderr||'{}')).error?.kind)==='not_found';}catch{return false;}
 }
-export function setCoordinatorName(c,name) {
+export function setCoordinatorName(c,name,provider) {
  if(typeof name!=='string'||!name.trim()||name.trim().length>40||/[\x00-\x1f\x7f]/.test(name))throw Error('名稱需為 1–40 字，且不得包含控制字元。');
- return withRosterState(c,()=>{const profile={...coordinatorProfile(c),name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;});
+ if(provider!==undefined&&!['claude','codex'].includes(provider))throw Error('領頭羊引擎需選擇 Claude 或 Codex。');
+ return withRosterState(c,()=>{const profile={...coordinatorProfile(c),name:name.trim(),...(provider===undefined?{}:{provider})};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;});
 }
 export function appointAgent(c,agentId){
  return withRosterState(c,()=>{
  const agent=roster(c).find(a=>a.id===agentId);if(!agent)throw Error('請選擇這個專案已加入的代理。');
- saveRoster(c,roster(c).map(a=>a.id===agentId?{...a,provider:'claude',model:'claude-opus-5-5',level:'manager'}:a));
- const profile={...coordinatorProfile(c),agentId:agent.id,name:agent.name,managerModel:'claude-opus-5-5'};save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return{...profile,started:false,providerChanged:agent.provider!=='claude'};
+ const model=agent.provider==='claude'?(agent.model||'claude-opus-5-5'):null;
+ saveRoster(c,roster(c).map(a=>a.id===agentId?{...a,level:'manager',...(model?{model}:{})}:a));
+ const profile={...coordinatorProfile(c),agentId:agent.id,name:agent.name,managerModel:model};save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return{...profile,provider:agent.provider,started:false};
  });
 }
 const workerTemplates = {claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn',antigravity:'herdr-antigravity-task'};
@@ -209,6 +212,20 @@ export async function retryStartup(c) {
   save(file,{...current,phase:'retry_requested'});
   return {queued:true,restarted:false};
 }
+function coordinatorCanSwitch(c,control,terminal){
+ if(Object.values(read(path.join(teamDir(c),'collaborations.json'))||{}).some(job=>job.sourceTerminal===control.terminal&&!['done','failed'].includes(job.status)))return false;
+ if(!terminal||terminal.state==='finished')return true;
+ const apps=control.role==='codex'?['codex']:['claude','claude-code'];
+ if(terminal.cwd!==c.cwd||terminal.parent||terminal.labels?.['team.direct']==='true'||!apps.includes(terminal.status?.app)||!['idle','done','error'].includes(terminal.status?.state))return false;
+ const children=c.run('hc',['ls','--json','--label',`team.owner=${control.terminal}`]);
+ const workers=Array.isArray(children)?children:children.terminals||[];
+ return !workers.some(row=>{
+  const id=row.address||row.terminal||row.id;
+  if(!/^t[a-z0-9]+$/.test(id||''))return true;
+  const worker=c.run('hc',['get',id]);
+  return worker.parent===control.terminal&&worker.state==='live'&&!['idle','done'].includes(worker.status?.state);
+ });
+}
 export function drainChats(c) {
   const dir=path.join(teamDir(c),'chat-queue');
   if(!fs.existsSync(dir)) return {sent:0,pending:0};
@@ -225,27 +242,39 @@ export function drainChats(c) {
       let t;try{t=c.run('hc',['get',owner.terminal]);}catch{continue;}
       if(t.state==='live' && ['working','blocked'].includes(t.status?.state))return{sent:0,pending:files.length,reason:'another_conversation_busy',blockingChat:other.chat,blockedTerminal:owner.terminal};
     }
-    let control=read(path.join(teamDir(c),'control.json')), t=null;
+    const controlFile=path.join(teamDir(c),'control.json'),profile=coordinatorProfile(c);
+    const leaseFile=path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'chat-delivery.json'),lease=read(leaseFile);
+    let control=read(controlFile), t=null;
+    const switching=!!(control?.terminal&&profile.provider&&control.role!==profile.provider);
     if(control?.terminal) {
-      try{t=c.run('hc',['get',control.terminal]);}catch(error){if(!missingTerminal(error)||control.phase!=='retry_requested')return{sent:0,pending:files.length,reason:'coordinator_unavailable'};}
+      try{t=c.run('hc',['get',control.terminal]);}catch(error){if(!missingTerminal(error)||(control.phase!=='retry_requested'&&!switching))return{sent:0,pending:files.length,reason:'coordinator_unavailable'};}
+    }
+    if(switching){
+      if((lease?.terminal===control.terminal&&Date.now()-lease.time<2500)||!coordinatorCanSwitch(c,control,t))return{sent:0,pending:files.length,reason:'waiting_engine_switch'};
+      if(t?.state==='live'){
+        c.run('hc',['kill',control.terminal]);
+        try{if(c.run('hc',['get',control.terminal]).state!=='finished')return{sent:0,pending:files.length,reason:'waiting_engine_switch'};}catch(error){if(!missingTerminal(error))throw error;}
+      }
+      control={...control,phase:'retry_requested'};save(controlFile,control);t=null;
     }
     const foreground=t?.foreground?.argv || [];
     const shellWithoutAgent=foreground.length && /(?:^|\/)(?:zsh|bash|sh|fish|nu|pwsh)$/.test(foreground[0]) && !t?.status?.app;
     // Leaving a startup/trust dialog is not permission to repeatedly reopen it.
     if(t?.state==='finished'&&!t.status?.app&&control?.phase!=='retry_requested')return{sent:0,pending:files.length,reason:'startup_stopped',blockedTerminal:control.terminal};
     if(!t || t.state==='finished' || (shellWithoutAgent && Date.now()-(control.startedAt||0)>60000)) {
-      const argv=[path.join(os.homedir(),'.local/bin/herdr-team-lead')];
+      const provider=coordinatorProvider(c),launcher=provider==='codex'?'herdr-team-backup':'herdr-team-lead';
+      const argv=[path.join(os.homedir(),'.local/bin',launcher)];
       if(c.chat)argv.push('--team-chat',c.chat);
-      if(control?.role==='claude' && /^[a-f0-9-]{36}$/.test(control.sessionId||''))argv.push('--resume',control.sessionId);
-      const made=c.headless ? coreLaunch(c,argv) : c.run('herdr-app',['do','space.new',JSON.stringify({name:path.basename(c.cwd),tab:'Claude · 對話總控',folder:c.cwd,argv,focus:false})]);
+      if(provider==='codex')argv.push('--team-preferred');
+      else if(/^[a-f0-9-]{36}$/.test(control?.sessionId||''))argv.push('--resume',control.sessionId);
+      const made=c.headless ? coreLaunch(c,argv) : c.run('herdr-app',['do','space.new',JSON.stringify({name:path.basename(c.cwd),tab:(provider==='codex'?'Codex':'Claude')+' · 對話總控',folder:c.cwd,argv,focus:false})]);
       if(!made.terminal)throw new Error('Herdr 沒有回傳總控。');
-      const current=read(path.join(teamDir(c),'control.json'));
-      if(current?.terminal!==made.terminal)save(path.join(teamDir(c),'control.json'),{...control,terminal:made.terminal,role:'claude',phase:'starting',startedAt:Date.now()});
+      const current=read(controlFile);
+      if(current?.terminal!==made.terminal)save(controlFile,{...control,terminal:made.terminal,role:provider,phase:'starting',startedAt:Date.now()});
       return{sent:0,pending:files.length,reason:'starting'};
     }
     if(!['claude-code','claude','codex'].includes(t.status?.app) || !['idle','done'].includes(t.status?.state))return{sent:0,pending:files.length,reason:t.status?.state||'starting'};
     // Avoid delivering a second queued message before the core reports the new turn.
-    const leaseFile=path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'chat-delivery.json'),lease=read(leaseFile);
     if(lease && Date.now()-lease.time<2500)return{sent:0,pending:files.length,reason:'awaiting_turn'};
     const {name,msg}=files[0];
     try {
@@ -429,7 +458,7 @@ async function response(c, id) {
     if (fs.existsSync(file)) { clearTimeout(timer); watcher.close(); resolve(read(file)); }
   });
 }
-export function register(c, role) {
+export function register(c, role, preferred=false) {
   if (!c.terminal) return { registered: false, reason: 'not_in_herdr' };
   const p = paths(c), registrationLock = path.join(p.dir, 'register.lock');
   let registration;
@@ -447,7 +476,7 @@ export function register(c, role) {
   }
   const state = { ...old, terminal: c.terminal, role, phase: 'active', startedAt: Date.now() };
   save(p.control, state);
-  log(c, role, role === 'claude' ? 'Claude 主總控已連線。' : 'Codex 備援總控已連線；先讀交接紀錄再接手。');
+  log(c, role, role === 'claude' ? 'Claude 主總控已連線。' : preferred?'Codex 領頭羊已連線。':'Codex 備援總控已連線；先讀交接紀錄再接手。');
   return state;
   } finally { fs.closeSync(registration); fs.unlinkSync(registrationLock); }
 }
@@ -520,7 +549,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (cmd === 'drain-project') result = drainProject(context());
     else if (cmd === 'prompt') {let prompt=fs.readFileSync(0,'utf8');const c=context();prompt=prompt.replaceAll('.herdr-team/',teamDir(c)+'/');if(c.chat)prompt=prompt.replaceAll('herdr-team-runtime ',`herdr-team-runtime --chat ${c.chat} `);if(c.headless)prompt=prompt.replaceAll('面板必須開啟。','背景工作服務必須運作。');process.stdout.write(prompt);result=null;}
     else if(cmd==='state-dir'){const c=context();paths(c);process.stdout.write(c.teamBase+'\n');result=null;}
-    else if (cmd === 'register') result = register(context(), args[0]);
+    else if (cmd === 'register') result = register(context(), args[0],args[1]==='--preferred');
     else if (cmd === 'takeover') result = takeover(context(args[0] || process.cwd(), null), 'user_requested', false);
     else if (cmd === 'log') result = log(context(), args[0], args.slice(1).join(' '));
     else if (cmd === 'report') result = report(context(), args[0], args[1], args.slice(2).join(' '));

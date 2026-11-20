@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-agents29';
+const UI_BUILD='20261120-engine30';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -346,33 +346,44 @@ function editAgent(agent=null){
  if(!state?.project){notice('請先建立工作專案。');return;}
  editing=agent?.id||null;
  const coordinator=editing==='__coordinator__';
- $('agent-dialog').querySelector('h2').textContent=coordinator?'總控名稱':agent?'代理設定':'新增代理';
+ $('agent-dialog').querySelector('h2').textContent=coordinator?'領頭羊設定':agent?'代理設定':'新增代理';
  for(const label of $('agent-dialog').querySelectorAll('label')){
-  label.hidden=coordinator&&!label.contains($('agent-name'))||!agent&&label.hasAttribute('data-agent-advanced');
+  label.hidden=coordinator&&!label.contains($('agent-name'))&&!label.contains($('agent-provider'))||!agent&&label.hasAttribute('data-agent-advanced');
  }
  $('agent-name').value=agent?.name||'';
  $('agent-group').value=agent?.group||'';
  $('agent-brief').value=agent?.brief||'';
- $('agent-provider').value=coordinator?'claude':agent?.provider||'codex';
+ const provider=$('agent-provider');
+ for(const option of provider.options)option.hidden=option.disabled=coordinator&&!['claude','codex'].includes(option.value);
+ provider.value=coordinator?(state.coordinatorProvider||'claude'):agent?.provider||'codex';
  $('agent-model').value=(coordinator?state.coordinatorPreferredModel:agent?.model)||'claude-opus-5-5';
  $('agent-model-label').hidden=!agent||$('agent-provider').value!=='claude';
  $('agent-model-observed').hidden=!agent;
  $('agent-settings-help').hidden=!agent;
  $('agent-save').textContent=agent?'保存設定':'建立代理';
  const observed=coordinator?state.coordinatorModel:terminalFor(agent||{})?.model;
- $('agent-model-observed').textContent=observed?'最近確認模型：'+(modelNames[observed]||observed):'尚未取得會話的模型確認；選項會保存為下次使用。';
+ $('agent-model-observed').textContent=provider.value==='codex'?'Codex 使用主機 CLI 設定的模型。':observed?'最近確認模型：'+(modelNames[observed]||observed):'最近使用的模型會在引擎回覆後顯示。';
+ $('agent-save-error').textContent='';
  $('appoint-agent').hidden=!agent||coordinator;$('appoint-agent').disabled=state.coordinatorAgentId===agent?.id;$('remove-agent').hidden=true;$('remove-agent').disabled=!!agent&&!!terminalFor(agent);$('agent-dialog').showModal();
 }
 $('manage-team').onclick=openTeam;$('edit-agent').onclick=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});
 $('close-dialog').onclick=$('cancel-dialog').onclick=()=>$('agent-dialog').close();
 async function saveAgent(remove=false){
- if(editing==='__coordinator__'){let message='名稱已保存。';if($('agent-model').value!==(state.coordinatorPreferredModel||'claude-opus-5-5'))message=(await api('model',{model:$('agent-model').value})).message;await api('coordinator',{name:$('agent-name').value.trim()});$('agent-dialog').close();notice(message);await refresh();return;}
+ if(editing==='__coordinator__'){
+  const provider=$('agent-provider').value,model=$('agent-model').value;
+  let message='領頭羊設定已保存。';
+  if(provider==='claude'&&model!==(state.coordinatorPreferredModel||'claude-opus-5-5'))message=(await api('model',{model})).message;
+  const changed=provider!==(state.coordinatorProvider||'claude');
+  if(changed)message='引擎已保存。領頭羊會在目前工作結束後使用 '+providerName(provider)+' 接收下一則訊息。';
+  await api('coordinator',{name:$('agent-name').value.trim(),...(changed?{provider}:{})});
+  $('agent-dialog').close();notice(message);await refresh();return;
+ }
  const a={id:editing||'agent-'+crypto.randomUUID().slice(0,12),name:$('agent-name').value.trim(),group:$('agent-group').value.trim(),brief:$('agent-brief').value.trim(),provider:$('agent-provider').value,level:state.agents.find(a=>a.id===editing)?.level||'worker'};
- let modelMessage='';if(!remove&&a.provider==='claude'){a.model=editing?$('agent-model').value:'claude-opus-5-5';const old=state.agents.find(x=>x.id===a.id);if(old?.provider==='claude'&&a.model!==(old.model||'claude-opus-5-5')){const result=await api('agent-model',{agentId:a.id,model:a.model});modelMessage=result.message;}}
+ let modelMessage='';if(!remove&&a.provider==='claude'){a.model=editing?$('agent-model').value:'claude-opus-5-5';const old=state.agents.find(x=>x.id===a.id);if(old?.provider==='claude'&&a.model!==(old.model||'claude-opus-5-5')){const result=await api('agent-model',{agentId:a.id,model:a.model});modelMessage=result.message;await refresh();}}
  const agents=state.agents.filter(x=>x.id!==a.id);if(!remove)agents.push(a);
  await api('roster',{agents,rosterRevision:state.rosterRevision});selectedAgent=remove?null:a.id;$('agent-dialog').close();notice(modelMessage||'代理設定已保存。');await refresh();restoreDraft();
 }
-$('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await saveAgent();}catch(error){notice(error.message);}finally{b.disabled=false;}};
+$('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('agent-save-error').textContent='';try{await saveAgent();}catch(error){$('agent-save-error').textContent=error.message;}finally{b.disabled=false;}};
 $('remove-agent').onclick=async()=>{try{await saveAgent(true);}catch(e){notice(e.message);}};
 $('new-chat').onclick=async()=>{if(posting||!state?.project)return;try{const next=await api('chat',{});await switchChat(next.project,next.chat);notice('已建立空白對話，尚未啟動代理。');}catch(e){notice(e.message);}};
 window.addEventListener('beforeunload',persistDraft);
@@ -500,9 +511,13 @@ $('retry-start').onclick=async()=>{const button=$('retry-start');button.disabled
 
 $('project-rename-form').onsubmit=async e=>{e.preventDefault();try{await api('project-name',{name:$('project-rename').value.trim()});await refresh();$('team-project-name').textContent=$('project-rename').value.trim();notice('專案名稱已保存。');}catch(error){notice(error.message);}};
 
-$('agent-provider').onchange=()=>{$('agent-model-label').hidden=!editing||$('agent-provider').value!=='claude';};
+$('agent-provider').onchange=()=>{
+ const provider=$('agent-provider').value;
+ $('agent-model-label').hidden=!editing||provider!=='claude';
+ $('agent-model-observed').textContent=provider==='codex'?'Codex 使用主機 CLI 設定的模型。':'最近使用的模型會在引擎回覆後顯示。';
+};
 
-$('appoint-agent').onclick=async()=>{try{const result=await api('appoint',{agentId:editing});$('agent-dialog').close();selectedAgent=editing;notice(result.providerChanged?'已任命協調者；依你的設定，管理者下次使用 Claude Opus 5.5。':result.modelApplied?'已任命協調者，CLI 已確認使用 Opus 5.5。':'已任命協調者，下次開啟使用 Opus 5.5。');await refresh();}catch(error){notice(error.message);}};
+$('appoint-agent').onclick=async()=>{try{const result=await api('appoint',{agentId:editing});$('agent-dialog').close();selectedAgent=editing;notice('已任命協調者，使用 '+providerName(result.provider)+'。');await refresh();}catch(error){$('agent-save-error').textContent=error.message;}};
 
 $('rename-cancel').onclick=()=>$('rename-dialog').close();
 $('rename-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const id=e.currentTarget.dataset.agent,name=$('rename-name').value.trim();if(id==='__coordinator__')await api('coordinator',{name});else await api('roster',{rosterRevision:state.rosterRevision,agents:state.agents.map(a=>a.id===id?{...a,name}:a)});$('rename-dialog').close();await refresh();notice('名稱已保存。');}catch(error){$('rename-error').textContent=error.message;}finally{b.disabled=false;}};

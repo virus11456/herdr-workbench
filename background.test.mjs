@@ -93,3 +93,28 @@ test('replacement registration requires explicit retry and its own real project 
  fs.mkdirSync(c.teamDir,{recursive:true});const file=path.join(c.teamDir,'control.json');fs.writeFileSync(file,JSON.stringify({terminal:'tunitold',phase:'active'}));assert.throws(()=>register(c,'claude'),/Cannot verify/);
  fs.writeFileSync(file,JSON.stringify({terminal:'tunitold',phase:'retry_requested'}));wrongFolder=true;assert.throws(()=>register(c,'claude'),/real local/);wrongFolder=false;assert.equal(register(c,'claude').terminal,'tunitreplacement');
 });
+
+test('a saved Codex preference waits for the Claude owner and its active workers before delivering in the same chat',t=>{
+ const {root,project}=fixture(t),calls=[];let oldState='working',workerState='working',closed=false;
+ const c=context(project,null,(_cmd,args)=>{
+  calls.push(args);
+  if(args[0]==='get'&&args[1]==='told')return{cwd:fs.realpathSync(project),state:closed?'finished':'live',status:{app:'claude-code',state:oldState}};
+  if(args[0]==='get'&&args[1]==='tworker')return{parent:'told',state:'live',status:{state:workerState}};
+  if(args[0]==='get'&&args[1]==='tcodex')return{cwd:project,state:'live',status:{app:'codex',state:'idle'}};
+  if(args[0]==='ls')return{terminals:[{address:'tworker'}]};
+  if(args[0]==='kill'){assert.equal(args[1],'told');closed=true;return{ok:true};}
+  if(args[0]==='run'){assert(args.includes('--team-preferred'));assert(args.some(x=>x.endsWith('/herdr-team-backup')));return{address:'tcodex'};}
+  if(args[0]==='send'){assert.equal(args[1],'tcodex');assert.match(args[2],/Same conversation/);return{ok:true};}
+  assert.fail('Unexpected call '+args[0]);
+ },'unit-chat',{headless:true,stateRoot:path.join(root,'private')});
+ enqueueChat(c,'Same conversation');const controlFile=path.join(c.teamDir,'control.json'),messages=path.join(c.teamDir,'messages.jsonl'),before=fs.readFileSync(messages,'utf8');
+ fs.writeFileSync(controlFile,JSON.stringify({terminal:'told',role:'claude',phase:'active',sessionId:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}));
+ assert.throws(()=>setCoordinatorName(c,'領頭羊','unknown'),/引擎/);
+ assert.equal(setCoordinatorName(c,'領頭羊','codex').provider,'codex');assert.equal(calls.length,0);
+ assert.equal(drainChats(c).reason,'waiting_engine_switch');
+ oldState='done';assert.equal(drainChats(c).reason,'waiting_engine_switch');assert.equal(closed,false);
+ workerState='done';assert.equal(drainChats(c).reason,'starting');assert.equal(closed,true);
+ const control=JSON.parse(fs.readFileSync(controlFile));assert.equal(control.role,'codex');assert.equal(control.sessionId,'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+ assert.equal(drainChats(c).sent,1);assert(fs.readFileSync(messages,'utf8').startsWith(before));
+ assert.equal(calls.filter(args=>args[0]==='run').length,1);assert.equal(calls.filter(args=>args[0]==='send').length,1);
+});
