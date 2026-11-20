@@ -2,11 +2,11 @@ import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-direct14';
+const UI_BUILD='20261120-direct15';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
-const modelLabel=(a,t)=>t?.model?(modelNames[t.model]||t.model):a.provider==='claude'?'下次：'+(modelNames[a.model||'claude-opus-5-5']):'模型待確認';
+const modelLabel=(a,t)=>t?.model?(modelNames[t.model]||t.model):a.provider==='claude'?'下次：'+(modelNames[a.model||'claude-opus-5-5']):t?'模型讀取中':providerName(a.provider)+' · 本對話未啟動';
 const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-height:520px)');
 const initialQuery=new URLSearchParams(location.search);
 let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,historyVisible=false,editing=null,posting=false,revision=0;
@@ -89,7 +89,7 @@ function renderNav(){
   const current=project.id===selection.project,lead=current?state.terminals.find(t=>t.address===state.control?.terminal):null;
   if(!current)continue;
   const open=async agent=>{if(selection.project!==project.id)await switchChat(project.id,project.chats.at(-1)?.id);switchAgent(agent?.id||null);};
-  if(!project.agentWorkspace)member(project.coordinatorName||'協調總控',lead?status(lead):'聊聊這個專案的目標','claude',current&&!selectedAgent,()=>open(null),lead?.state==='live');
+  if(!project.agentWorkspace)member(project.coordinatorName||'領頭羊',lead?status(lead):'聊聊這個專案的目標','claude',current&&!selectedAgent,()=>open(null),lead?.state==='live');
   for(const a of members){const t=current?terminalFor(a):null;member(a.name+(state.coordinatorAgentId===a.id?' · 協調者':''),`${modelLabel(a,t)} · ${agentStatus(a,t)}`,a.provider,current&&selectedAgent===a.id,()=>open(a),t?.state==='live');}
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
@@ -97,7 +97,7 @@ function renderNav(){
 }
 function render(){
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
- $('title').textContent=agent?.name||state.coordinatorName||'協調總控';
+ $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
  $('subtitle').textContent=agent?[agent.group,providerName(agent.provider),modelLabel(agent,live),agent.level==='manager'?'管理者':'工作代理'].filter(Boolean).join(' · '):`${state.projects.find(p=>p.id===selection.project)?.name||'專案協作'}`;
  $('recipient').textContent=agent?`交給 ${agent.name}`:'專案協作';
@@ -153,9 +153,9 @@ $('details-toggle').onclick=()=>{$('team-dialog').close();historyVisible=false;d
 function editAgent(agent=null){
  if(!state?.project){notice('請先建立工作專案。');return;}
  editing=agent?.id||null;const coordinator=editing==='__coordinator__';$('agent-dialog').querySelector('h2').textContent=coordinator?'總控名稱':'代理設定';$('agent-dialog').querySelectorAll('label').forEach(label=>label.hidden=coordinator&&!label.contains($('agent-name')));$('agent-model-observed').hidden=false;$('agent-name').value=agent?.name||'';$('agent-group').value=agent?.group||'';$('agent-brief').value=agent?.brief||'';$('agent-provider').value=coordinator?'claude':agent?.provider||'codex';$('agent-level').value=agent?.level||'worker';$('agent-model').value=coordinator?state.coordinatorPreferredModel||'claude-opus-5-5':agent?.model||'claude-opus-5-5';$('agent-model-label').hidden=$('agent-provider').value!=='claude';const observed=coordinator?state.coordinatorModel:terminalFor(agent||{})?.model;$('agent-model-observed').textContent=observed?'最近確認模型：'+(modelNames[observed]||observed):'尚未取得會話的模型確認；選項會保存為下次使用。';
- $('appoint-agent').hidden=!agent||coordinator;$('appoint-agent').disabled=state.coordinatorAgentId===agent?.id;$('remove-agent').hidden=!agent||coordinator;$('remove-agent').disabled=!!agent&&!!terminalFor(agent);$('agent-dialog').showModal();
+ $('appoint-agent').hidden=!agent||coordinator;$('appoint-agent').disabled=state.coordinatorAgentId===agent?.id;$('remove-agent').hidden=!agent||coordinator||agent.id==='starter';$('remove-agent').disabled=!!agent&&!!terminalFor(agent);$('agent-dialog').showModal();
 }
-$('manage-team').onclick=openTeam;$('edit-agent').onclick=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'協調總控'});
+$('manage-team').onclick=openTeam;$('edit-agent').onclick=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});
 $('close-dialog').onclick=$('cancel-dialog').onclick=()=>$('agent-dialog').close();
 async function saveAgent(remove=false){
  if(editing==='__coordinator__'){let message='名稱已保存。';if($('agent-model').value!==(state.coordinatorPreferredModel||'claude-opus-5-5'))message=(await api('model',{model:$('agent-model').value})).message;await api('coordinator',{name:$('agent-name').value.trim()});$('agent-dialog').close();notice(message);await refresh();return;}
@@ -185,7 +185,7 @@ function openTeam(){ $('project-rename').value=state?.projects.find(p=>p.id===se
 
  const p=state?.projects.find(p=>p.id===selection.project);$('team-project-name').textContent=p?.name||'請先建立專案';
  const list=$('team-member-list');list.replaceChildren();
- if(!state.agentWorkspace){const director=el('div','team-row');director.append(avatar('claude'),el('span','',state.coordinatorName||'協調總控'));const rename=el('button','','改名');rename.onclick=()=>{$('team-dialog').close();editAgent({id:'__coordinator__',name:state.coordinatorName||'協調總控'});};director.append(rename);list.append(director);}
+ if(!state.agentWorkspace){const director=el('div','team-row');director.append(avatar('claude'),el('span','',state.coordinatorName||'領頭羊'));const rename=el('button','','改名');rename.onclick=()=>{$('team-dialog').close();editAgent({id:'__coordinator__',name:state.coordinatorName||'領頭羊'});};director.append(rename);list.append(director);}
  for(const a of state?.agents||[]){const row=el('div','team-row');row.append(avatar(a.provider),el('span','',a.name));const b=el('button','','設定');b.onclick=()=>{$('team-dialog').close();editAgent(a);};row.append(b);list.append(row);}
  $('team-add').disabled=!p;$('team-history').disabled=!p;$('team-dialog').showModal();
 }
@@ -224,7 +224,7 @@ if('serviceWorker' in navigator && location.protocol==='https:') {
 fitDraft();
 
 $('title').setAttribute('role','button');$('title').tabIndex=0;$('title').setAttribute('aria-label','變更代理名稱');
-const renameCurrent=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'協調總控'});
+const renameCurrent=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});
 $('title').onclick=renameCurrent;$('title').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();renameCurrent();}};
 
 $('storage-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('storage',{folder:$('storage-folder').value.trim()});await refresh();notice('已設定新專案的 Drive 資料夾；雲端同步請查看 Drive 桌面版。');$('storage-status').textContent='Google Drive 資料夾已設定；雲端同步請查看 Drive 桌面版。';}catch(error){notice(error.message);}finally{b.disabled=false;}};

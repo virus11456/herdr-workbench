@@ -11,7 +11,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 export const recoverable = new Set(['rate_limit', 'server_error', 'authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'billing_error', 'model_not_found', 'cloud_credential_error']);
 export const claudeModels = {'claude-opus-5-5':'Opus 5.5', 'claude-fable-5-2':'Fable 5.2'};
 export const defaultRoster = () => [];
-export function coordinatorProfile(c) {return read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json')) || {name:'協調總控'};}
+export function coordinatorProfile(c) {return read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json')) || {name:'領頭羊'};}
+export function missingTerminal(error) {
+ try{return (error?.error?.kind||JSON.parse(String(error?.stdout||error?.stderr||'{}')).error?.kind)==='not_found';}catch{return false;}
+}
 export function setCoordinatorName(c,name) {
  if(typeof name!=='string'||!name.trim()||name.trim().length>40||/[\x00-\x1f\x7f]/.test(name))throw Error('名稱需為 1–40 字，且不得包含控制字元。');
  const profile={...coordinatorProfile(c),name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;
@@ -40,7 +43,7 @@ export function validateRoster(value) {
 }
 export function roster(c) { return validateRoster(read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json')) ?? read(path.join(teamDir(c),'roster.json')) ?? defaultRoster()); }
 export function saveRoster(c,value) {
-  const agents=validateRoster(value);save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
+  const agents=validateRoster(value);if(roster(c).some(a=>a.id==='starter')&&!agents.some(a=>a.id==='starter'))throw Error('預設領頭羊不能刪除；可以改名、設定模型或另外任命協調者。');save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
   const profile=coordinatorProfile(c);if(profile.agentId){const selected=agents.find(a=>a.id===profile.agentId);save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),{...profile,agentId:selected?.id||null,...(selected?{name:selected.name}:{})});}
   return {agents,saved:true,started:false};
 }
@@ -180,8 +183,8 @@ function conversationContexts(c) {
 export async function retryStartup(c) {
   const file=path.join(teamDir(c),'control.json'),control=read(file);
   if(!control?.terminal)throw Error('No previous coordinator to reopen.');
-  const terminal=await c.run('hc',['get',control.terminal]);
-  if(terminal.state!=='finished'||terminal.status?.app)throw Error('總控仍在執行或已進入工作階段，請先親自查看原終端。');
+  let terminal;try{terminal=await c.run('hc',['get',control.terminal]);}catch(error){if(!missingTerminal(error))throw error;}
+  if(terminal&&(terminal.state!=='finished'||terminal.status?.app))throw Error('總控仍在執行或已進入工作階段，請先親自查看原終端。');
   const current=read(file);
   if(current?.terminal!==control.terminal)throw Error('總控已變更，請重新整理。');
   save(file,{...current,phase:'retry_requested'});
@@ -205,7 +208,7 @@ export function drainChats(c) {
     }
     let control=read(path.join(teamDir(c),'control.json')), t=null;
     if(control?.terminal) {
-      try{t=c.run('hc',['get',control.terminal]);}catch{return{sent:0,pending:files.length,reason:'coordinator_unavailable'};}
+      try{t=c.run('hc',['get',control.terminal]);}catch(error){if(!missingTerminal(error)||control.phase!=='retry_requested')return{sent:0,pending:files.length,reason:'coordinator_unavailable'};}
     }
     const foreground=t?.foreground?.argv || [];
     const shellWithoutAgent=foreground.length && /(?:^|\/)(?:zsh|bash|sh|fish|nu|pwsh)$/.test(foreground[0]) && !t?.status?.app;
@@ -411,8 +414,11 @@ export function register(c, role) {
   const old = read(p.control);
   if (old?.terminal && old.terminal !== c.terminal) {
     let t;
-    try { t = c.run('hc', ['get', old.terminal]); } catch { throw new Error('Cannot verify the previous coordinator; refusing to create a second one.'); }
-    if (t.state === 'live' && ((t.status?.app && !['done', 'error'].includes(t.status.state)) || (!t.status?.app && Date.now() - old.startedAt < 60000))) throw new Error('This project already has a coordinator. Use the panel to continue or take over.');
+    try { t = c.run('hc', ['get', old.terminal]); } catch(error) {
+      if(!missingTerminal(error)||old.phase!=='retry_requested')throw new Error('Cannot verify the previous coordinator; refusing to create a second one.');
+      const current=c.run('hc',['get',c.terminal]);if(current.cwd!==c.cwd||current.parent||current.state!=='live')throw Error('Replacement must be a real local project coordinator.');
+    }
+    if (t?.state === 'live' && ((t.status?.app && !['done', 'error'].includes(t.status.state)) || (!t.status?.app && Date.now() - old.startedAt < 60000))) throw new Error('This project already has a coordinator. Use the panel to continue or take over.');
   }
   const state = { ...old, terminal: c.terminal, role, phase: 'active', startedAt: Date.now() };
   save(p.control, state);

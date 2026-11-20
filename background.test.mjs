@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
-import {context,saveRoster,roster,enqueueChat,drainChats,setCoordinatorName,coordinatorProfile,captureReply,retryStartup} from './team-runtime.mjs';
+import {context,saveRoster,roster,enqueueChat,drainChats,setCoordinatorName,coordinatorProfile,captureReply,retryStartup,register} from './team-runtime.mjs';
 import {deploymentPlan,applyDeployment,mergeProjects} from './setup.mjs';
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'workbench-headless-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const project=path.join(root,"project space's");fs.mkdirSync(project);return{root,project};}
 test('Drive project files and private runtime state remain separate, with project-scoped names and rosters',t=>{
@@ -7,7 +7,7 @@ test('Drive project files and private runtime state remain separate, with projec
  const c=context(project,null,()=>{throw Error('No actual core');},'unit-chat',config);saveRoster(c,[]);setCoordinatorName(c,'牧羊人總控');
  assert.equal(coordinatorProfile(context(project,null,null,'another-chat',config)).name,'牧羊人總控');assert.deepEqual(roster(c),[]);
  assert(!fs.existsSync(path.join(project,'.herdr-team')));assert(c.teamDir.startsWith(config.stateRoot+path.sep));assert.throws(()=>setCoordinatorName(c,'\n'),/名稱/);
- const other=path.join(root,'other');fs.mkdirSync(other);assert.equal(coordinatorProfile(context(other,null,null,null,config)).name,'協調總控');
+ const other=path.join(root,'other');fs.mkdirSync(other);assert.equal(coordinatorProfile(context(other,null,null,null,config)).name,'領頭羊');
 });
 test('background chat starts core directly, waits for idle, and sends the same queued task only once',t=>{
  const {root,project}=fixture(t),calls=[];let ready=false;
@@ -77,4 +77,19 @@ test('startup exit does not auto-reopen permission prompts; reopening requires a
  for(let i=0;i<3;i++)assert.equal(drainChats(c).reason,'startup_stopped');assert.equal(starts,0);
  finished=false;await assert.rejects(()=>retryStartup(c),/仍在執行/);finished=true;
  assert.equal((await retryStartup(c)).queued,true);assert.equal(drainChats(c).reason,'starting');assert.equal(starts,1);
+});
+
+test('a removed coordinator preserves queued messages and resumes only after explicit retry; core failures never authorize replacement',async t=>{
+ const {root,project}=fixture(t);let starts=0,missing=true,unavailable=false;
+ const c=context(project,null,(_cmd,args)=>{if(args[0]==='get'){if(unavailable)throw Error('core transport offline');if(missing)throw Object.assign(Error('removed'),{stdout:JSON.stringify({error:{kind:'not_found'}})});return{address:'tunitnew',state:'live',status:{app:'claude-code',state:'idle'}};}if(args[0]==='run'){starts++;missing=false;return{address:'tunitnew'};}if(args[0]==='send')return{ok:true};throw Error(args.join(' '));},'unit-chat',{headless:true,stateRoot:path.join(root,'private')});
+ enqueueChat(c,'Existing queued message');fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitremoved',role:'claude',phase:'active',sessionId:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}));
+ assert.equal(drainChats(c).reason,'coordinator_unavailable');assert.equal(starts,0);
+ unavailable=true;await assert.rejects(()=>retryStartup(c),/transport/);assert.equal(drainChats(c).sent,0);unavailable=false;
+ await retryStartup(c);assert.equal(drainChats(c).reason,'starting');assert.equal(starts,1);assert.equal(drainChats(c).sent,1);assert.equal(drainChats(c).sent,0);
+});
+
+test('replacement registration requires explicit retry and its own real project terminal',t=>{
+ const {root,project}=fixture(t);let wrongFolder=false;const c=context(project,'tunitreplacement',(_cmd,args)=>{if(args[1]==='tunitold')throw Object.assign(Error('removed'),{stderr:JSON.stringify({error:{kind:'not_found'}})});return{address:'tunitreplacement',state:'live',cwd:wrongFolder?root:fs.realpathSync(project)};},'unit-chat',{headless:true,stateRoot:path.join(root,'private')});
+ fs.mkdirSync(c.teamDir,{recursive:true});const file=path.join(c.teamDir,'control.json');fs.writeFileSync(file,JSON.stringify({terminal:'tunitold',phase:'active'}));assert.throws(()=>register(c,'claude'),/Cannot verify/);
+ fs.writeFileSync(file,JSON.stringify({terminal:'tunitold',phase:'retry_requested'}));wrongFolder=true;assert.throws(()=>register(c,'claude'),/real local/);wrongFolder=false;assert.equal(register(c,'claude').terminal,'tunitreplacement');
 });
