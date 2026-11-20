@@ -40,18 +40,18 @@ test('custom agents route through coordinator with current roster and target met
   assert.throws(()=>routeMessage('@developer ',roster(c)),/輸入任務/);
   const msg=enqueueChat(c,'@planner 規劃協作');assert.equal(msg.target,'planner');
   const queued=JSON.parse(fs.readFileSync(path.join(c.teamDir,'chat-queue',msg.id+'.json')));
-  assert.match(queued.text,/小組主管/);assert.equal(queued.original,'@planner 規劃協作');
+  assert.match(queued.text,/依任務安排協作/);assert.equal(queued.original,'@planner 規劃協作');
   const event=JSON.parse(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim());
   assert.equal(event.target,'planner');
 });
-test('named role chooses its real CLI template and gives manager a scoped report command',t=>{
+test('named role chooses its real CLI template and gives the chosen agent a scoped report command',t=>{
   const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const calls=[];
   c.run=(cmd,args)=>{calls.push([cmd,args]);if(args[0]==='ls')return {terminals:[]};if(args[0]==='run')return {address:'tunitworker'};throw new Error('unexpected');};
   const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:'planner',name:'unit-planner',task:'規劃並協調驗收'}});
   assert.equal(result.address,'tunitworker');
   const run=calls.find(([,args])=>args[0]==='run')[1];
   assert(run.includes('herdr-claude-task'));assert(run.includes('team.agent=planner'));
-  assert.match(run.at(-1),/小組主管/);assert.match(run.at(-1),/--chat unit-chat report tunitowner/);
+  assert.match(run.at(-1),/依任務安排協作/);assert.match(run.at(-1),/--chat unit-chat report tunitowner/);
   assert.match(run.at(-1),/不得自行啟動其他代理/);
 });
 test('foreign callers, escaping folders and duplicate live roles are rejected',t=>{

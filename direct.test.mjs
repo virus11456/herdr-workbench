@@ -94,3 +94,60 @@ test('a startup trust exit is not reopened until the user explicitly retries the
  enqueueDirect(c,'engineer','Pending user question','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');assert.equal(drainDirect(c).reason,'startup_stopped');assert.equal(drainDirect(c).reason,'startup_stopped');assert.equal(launches,0);
  assert.equal(retryDirect(c,'engineer').restarted,false);assert.equal(drainDirect(c).started,'tunitnew');assert.equal(launches,1);assert.equal(drainDirect(c).sent,1);assert.throws(()=>retryDirect(c,'engineer'),/仍在執行/);assert(!fs.existsSync(path.join(c.teamDir,'control.json')));
 });
+
+test('cancel archives undelivered chat tasks and cannot dispatch or retry the cancelled message',async t=>{
+ const {actOnChatTask,chatTaskControls}=await import('./direct.mjs');
+ const {enqueueChat,drainChats}=await import('./team-runtime.mjs');
+ const {c}=fixture(t);
+ c.run=()=>assert.fail('Cancellation must not contact Core');
+ const id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',legacy='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+ enqueueDirect(c,'engineer','Cancel this turn',id);
+ enqueueChat(c,'Cancel legacy queue',legacy);
+ const events=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ assert.deepEqual(chatTaskControls(c,events,[],{}),{[id]:'cancel',[legacy]:'cancel'});
+ const lock=path.join(c.teamBase,'chat-delivery.lock');
+ fs.writeFileSync(lock,'worker');
+ assert.throws(()=>actOnChatTask(c,{id,action:'cancel'}),e=>e.status===409);
+ fs.unlinkSync(lock);
+ for(const message of [id,legacy])assert.deepEqual(actOnChatTask(c,{id:message,action:'cancel'}),{status:'cancelled'});
+ assert.deepEqual(chatTaskControls(c,events,[],{}),{[id]:'cancelled',[legacy]:'cancelled'});
+ assert.equal(drainDirect(c).sent,0);
+ assert.equal(drainChats(c).sent,0);
+ assert.equal(enqueueDirect(c,'engineer','Cancel this turn',id).status,'cancelled');
+ assert.equal(enqueueChat(c,'Cancel legacy queue',legacy).status,'cancelled');
+ assert.equal(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').length,2);
+});
+
+test('stop only interrupts the same verified live direct turn and requires a confirmed result',async t=>{
+ const {actOnChatTask,chatTaskControls}=await import('./direct.mjs');
+ const {c}=fixture(t),id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',next='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+ let state='idle',turn=4,outcome='still_working',foreign=false,interrupts=0;
+ c.run=(_cmd,[verb,terminal])=>{
+  if(verb==='run')return{address:'tunittask'};
+  if(verb==='get')return{address:terminal,cwd:foreign?'/foreign':c.cwd,parent:null,state:'live',status:{app:'codex',state},turn,labels:{'team.direct':'true','team.agent':'engineer','team.chat':c.chat}};
+  if(verb==='send'){state='working';return{ok:true};}
+  if(verb==='interrupt'){assert.equal(terminal,'tunittask');interrupts++;if(outcome==='stopped'){state='idle';turn++;}return{outcome};}
+  assert.fail(verb);
+ };
+ enqueueDirect(c,'engineer','First task',id);
+ drainDirect(c);assert.equal(drainDirect(c).sent,1);
+ enqueueDirect(c,'engineer','Second task',next);
+ const events=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ const bindings=()=>JSON.parse(fs.readFileSync(path.join(c.teamDir,'direct-bindings.json'),'utf8'));
+ const terminal=()=>c.run('hc',['get','tunittask']);
+ assert.deepEqual(chatTaskControls(c,events,[terminal()],bindings()),{[id]:'stop',[next]:'cancel'});
+ const act=()=>actOnChatTask(c,{id,action:'stop'});
+ for(const stale of ['blocked','done']){state=stale;assert.throws(act,e=>e.status===409);}
+ state='working';turn=5;assert.throws(act,e=>e.status===409);turn=4;
+ foreign=true;assert.throws(act,/Foreign/);foreign=false;
+ assert.throws(()=>actOnChatTask(c,{id:next,action:'stop'}),e=>e.status===409);
+ assert.equal(interrupts,0);
+ assert.throws(act,/尚未確認/);
+ assert.equal(chatTaskControls(c,events,[terminal()],bindings())[id],'stop');
+ outcome='stopped';assert.deepEqual(act(),{status:'stopped'});assert.deepEqual(act(),{status:'stopped'});
+ assert.equal(interrupts,2);
+ assert.equal(chatTaskControls(c,events,[terminal()],bindings())[id],'stopped');
+ assert.equal(directReply({...c,terminal:'tunittask'},'Late reply','old').reason,'stopped_turn');
+ assert.equal(drainDirect(c).sent,1);
+ assert.equal(directReply({...c,terminal:'tunittask'},'New reply','new').captured,true);
+});

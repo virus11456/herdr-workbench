@@ -1,5 +1,5 @@
 // A display projection of observed state. It never dispatches or accepts work.
-export const taskLabels={queued:'等待接收',delivered:'已送達，等待回覆',working:'工作中',blocked:'等待你確認',stopped:'已停止',review:'待驗收',replied:'已回覆',done:'已驗收'};
+export const taskLabels={queued:'等待接收',delivered:'已送達，等待回覆',working:'工作中',blocked:'等待你確認',stopped:'已停止',cancelled:'已取消',review:'待驗收',replied:'已回覆',done:'已驗收'};
 export function agentTerminal(state,id){return id?state.terminals?.filter(t=>t.agentId===id).at(-1):state.terminals?.find(t=>t.address===state.control?.terminal);}
 export function flock(state){
  const list=[...(!state.agentWorkspace?[{id:null,name:state.coordinatorName||'領頭羊',provider:'claude'}]:[]),...(state.agents||[])];
@@ -18,7 +18,10 @@ export function taskCards(state,agentId=null){
   const reply=sent&&messages.find(r=>r.kind==='reply'&&belongs(r)&&r.replyTo===m.messageId);
   const latest=users.findLast(u=>(u.direct?u.target:null)===target)===m;let phase=reply?'replied':!sent?'queued':'delivered';
   if(!reply&&latest&&t?.state==='live'&&t.status?.state==='blocked')phase='blocked';else if(!reply&&sent&&latest&&(t?.state==='finished'||t?.status?.state==='error'))phase='stopped';else if(!reply&&sent&&latest&&t?.status?.state==='working')phase='working';
-  rows.push({id:'message:'+m.messageId,title:m.text||'對話任務',owner:name(target),agentId:target,phase,kind:'message',detail:phase==='replied'?'已收到這位代理的實際回覆；這不代表成果已通過驗收。':phase==='queued'?'訊息已保存，尚未確認送達代理。':undefined});
+  const control=state.taskControls?.[m.messageId];
+  if(control==='cancelled'||control==='stopped')phase=control;
+  const action=['cancel','stop'].includes(control)?control:undefined;
+  rows.push({action,id:'message:'+m.messageId,title:m.text||'對話任務',owner:name(target),agentId:target,phase,kind:'message',detail:phase==='cancelled'?'任務已從排隊移除。':phase==='stopped'&&control==='stopped'?'已確認代理停止這一回合。':phase==='replied'?'已收到這位代理的實際回覆；這不代表成果已通過驗收。':phase==='queued'?'訊息已保存，尚未確認送達代理。':undefined});
  }
  return rows;
 }

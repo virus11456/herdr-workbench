@@ -62,7 +62,7 @@ export function routeMessage(text, agents = []) {
   if(agent) {
     const task=original.slice(custom[0].length).trim();
     if(!task)throw new Error('請在代理名稱後輸入任務。');
-    return {target:agent.id,text:`[Herdr 路由：指定名冊代理 ${agent.name}（${agent.id}），引擎 ${agent.provider}，${agent.level==='manager'?'小組主管':'工作代理'}。總控以 request run 的 agentId=${agent.id} 派工並等待實際回報。職責：${agent.brief}]\n${task}`};
+    return {target:agent.id,text:`[Herdr 路由：指定名冊代理 ${agent.name}（${agent.id}），引擎 ${agent.provider}。總控以 request run 的 agentId=${agent.id} 派工並等待實際回報。職責：${agent.brief}]\n${task}`};
   }
   const match = original.match(/^@(claude|codex|minimax|antigravity)(?=\s|[：:，,]|$)[\s：:，,]*/i);
   if(custom && !match)throw new Error('找不到這位代理，請先在團隊設定新增。');
@@ -166,9 +166,9 @@ export function enqueueChat(c, text, id=randomUUID()) {
   if (!original) throw new Error('請先輸入訊息。');
   if(!/^[a-f0-9-]{36}$/.test(id))throw Error('Invalid message ID.');
   const dir=path.join(paths(c).dir,'chat-queue');
-  for(const suffix of ['.json','.json.sent']){
+  for(const suffix of ['.json.cancelled','.json','.json.sent']){
     const existing=read(path.join(dir,id+suffix));
-    if(existing){if(existing.original!==original)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:true,target:existing.target};}
+    if(existing){if(existing.original!==original)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix!=='.json.cancelled',target:existing.target,...(suffix==='.json.cancelled'?{status:'cancelled'}:{})};}
   }
   save(path.join(dir,`${id}.json`),{id,original,...routed,createdAt:new Date().toISOString(),sequence:process.hrtime.bigint().toString().padStart(24,'0')});
   log(c,'你',original,'user',{messageId:id,delivery:'queued',target:routed.target});
@@ -193,11 +193,11 @@ export async function retryStartup(c) {
 export function drainChats(c) {
   const dir=path.join(teamDir(c),'chat-queue');
   if(!fs.existsSync(dir)) return {sent:0,pending:0};
-  const files=fs.readdirSync(dir).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>({name:n,msg:read(path.join(dir,n))})).sort((a,b)=>(a.msg.sequence||a.msg.createdAt).localeCompare(b.msg.sequence||b.msg.createdAt)||a.name.localeCompare(b.name));
-  if(!files.length) return {sent:0,pending:0};
   const lock=path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'chat-delivery.lock');let fd;
-  try{fd=fs.openSync(lock,'wx',0o600);}catch(e){if(e.code==='EEXIST')return{sent:0,pending:files.length};throw e;}
+  try{fd=fs.openSync(lock,'wx',0o600);}catch(e){if(e.code==='EEXIST')return{sent:0};throw e;}
   try {
+    const files=fs.readdirSync(dir).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>({name:n,msg:read(path.join(dir,n))})).sort((a,b)=>(a.msg.sequence||a.msg.createdAt).localeCompare(b.msg.sequence||b.msg.createdAt)||a.name.localeCompare(b.name));
+    if(!files.length)return{sent:0,pending:0};
     // A project shares files: do not start another conversation while one is busy.
     for(const other of conversationContexts(c)) {
       if(teamDir(other)===teamDir(c)) continue;
@@ -232,8 +232,8 @@ export function drainChats(c) {
     try {
       const routed=routeMessage(msg.original,roster(c));
       if(routed.target!==msg.target)throw Error('Queued recipient changed; refusing to redirect.');
+      save(leaseFile,{terminal:control.terminal,time:Date.now(),messageId:msg.id,chat:c.chat});
       c.run('hc',['send',control.terminal,teamBrief(c)+'\n\n'+routed.text]);
-      save(leaseFile,{terminal:control.terminal,time:Date.now()});
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));
       log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent'});
       return{sent:1,pending:files.length-1};
@@ -346,7 +346,7 @@ export function executeRequest(c, req) {
     if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error('Worker cwd must remain inside this project.');
     const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
     const command=`herdr-team-runtime${c.chat ? ' --chat '+c.chat : ''} report ${control.terminal} ${quote(agent?.name || '代理')} '<摘要>'`;
-    const task=(agent ? `你是 ${agent.name}（${agent.id}），${agent.group} 的${agent.level==='manager'?'小組主管':'工作代理'}。職責：${agent.brief}。主管可要求協作、指派建議、追蹤與驗收；以回報命令向總控提出「協作請求：目標代理、任務、驗收條件」，等待總控派工與轉回結果。不得自行啟動其他代理。\n` : '')+
+    const task=(agent ? `你是 ${agent.name}（${agent.id}），${agent.group?`分組：${agent.group}。`:""}職責：${agent.brief}。代理可提出協作、指派建議、追蹤與驗收；以回報命令向總控提出「協作請求：目標代理、任務、驗收條件」，等待總控派工與轉回結果。不得自行啟動其他代理。\n` : '')+
       `本對話回報命令：${command}；交接資料在 ${teamDir(c)}/。\n${a.task}`;
     const labels=['--label',`team.chat=${c.chat || 'legacy'}`,'--label',`team.owner=${control.terminal}`,...(agent?['--label',`team.agent=${agent.id}`]:[])];
     if(agent) {

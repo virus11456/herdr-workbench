@@ -1,7 +1,7 @@
 import {createPushStore} from './push.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
-import {enqueueDirect,retryDirect} from '../direct.mjs';
+import {enqueueDirect,retryDirect,chatTaskControls,actOnChatTask} from '../direct.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -19,6 +19,11 @@ const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'ut
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
+function categoryName(value){
+  if(typeof value!=='string'||value.length>40||/[\p{Cc}]/u.test(value))throw failure('分類名稱最多 40 字。');
+  const name=value.trim();
+  return name==='未分類'?'':name;
+}
 export function createServer(config) {
   if(!config.allowedLogin||!/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/.test(config.origin))throw Error('An explicit Tailnet login and HTTPS origin are required.');
   const home=config.appHome || path.join(os.homedir(),'.config/herdr-app');
@@ -26,15 +31,18 @@ export function createServer(config) {
   const extraFile=path.join(home,'web','chats.json');
   const projectFile=path.join(home,'web','projects.json');
   const activeFile=path.join(home,'web','selection.json');
+  const categoriesFile=path.join(home,'web','project-categories.json');
   const rememberSelection=(p,chat)=>write(activeFile,{project:p.id||projectId(p.folder),chat});
   const csrf=randomBytes(32).toString('hex');let lastMessages=new Map();
   const projects=()=>{
+    const categories=read(categoriesFile,{});
     const shared=read(path.join(home,'shared.json'),{}),extra=read(extraFile,[]);
     const all=[...(shared['team-chat.projects']||[])];
     for(const p of read(projectFile,[]))if(!all.some(x=>x.folder===p.folder))all.push(p);
     return all.filter(p=>typeof p.folder==='string'&&Array.isArray(p.chats)).map(p=>{
       const chats=[...p.chats];for(const c of extra.filter(c=>c.folder===p.folder))if(!chats.some(x=>x.id===c.id))chats.push(c);
-      return {...p,id:projectId(p.folder),chats:chats.filter(c=>validChat(c.id))};
+      const id=projectId(p.folder);
+      return {...p,id,category:categories[id]??p.category??'',chats:chats.filter(c=>validChat(c.id))};
     });
   };
   const choose=(project,chat)=>{
@@ -58,11 +66,11 @@ export function createServer(config) {
   };
   const push=createPushStore({home,origin:config.origin,send:config.pushSend});
   const state=async url=>{
-    const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
-    if(!list.length)return {uiBuild:'20261120-chat25',appVersion:'0.5.1-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
+    const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,category:p.category,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
+    if(!list.length)return {uiBuild:'20261120-tasks26',appVersion:'0.6.0-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
     const picked=summary.find(p=>p.id===choice.p.id);
-    if(picked&&!picked.available)return{uiBuild:'20261120-chat25',appVersion:'0.5.1-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    if(picked&&!picked.available)return{uiBuild:'20261120-tasks26',appVersion:'0.6.0-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -83,7 +91,7 @@ export function createServer(config) {
     const taskList=checklist(c),jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c);taskList.items.push(...jobs.map(j=>({id:j.id,title:(members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent)+' → '+(members.find(a=>a.id===j.targetAgent)?.name||j.targetAgent),owner:members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent,acceptance:j.acceptance,status:j.status==='done'?'done':j.status==='queued'?'pending':'in_progress',verification:j.verification,evidence:j.evidence||[]})));
     const ownerModel=read(path.join(c.teamDir,'model.json')),ownerArgs=owner?.foreground?.argv||owner?.argv||[],modelAt=ownerArgs.indexOf('--model');
     const coordinatorParked=owner?.state==='live'&&!owner.status?.app&&control?.phase==='active'&&/(?:^|\/)(?:zsh|bash|sh|fish|nu)$/.test(ownerArgs[0]||'')&&!ownerArgs.includes('-c');
-    return {uiBuild:'20261120-chat25',appVersion:'0.5.1-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId})),messages,messagesRevision,control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {uiBuild:'20261120-tasks26',appVersion:'0.6.0-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId})),messages,messagesRevision,taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&j.status!=='done'),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
@@ -112,6 +120,7 @@ export function createServer(config) {
         }
         if(route==='/api/project'){
           if(typeof data.name!=='string'||!data.name.trim()||data.name.length>80)throw failure('請填寫專案名稱（最多 80 字）。');
+          const category=categoryName(data.category??'');
           if(!config.projectRoot)throw failure('主機尚未設定新專案工作資料夾。');
           const records=read(projectFile,[]);if(records.length>=100)throw failure('已達專案數量上限。');
           const parent=path.resolve(config.projectRoot);fs.mkdirSync(parent,{recursive:true,mode:0o700});
@@ -119,12 +128,31 @@ export function createServer(config) {
           const folder=path.join(fs.realpathSync(parent),slug+'-'+randomBytes(4).toString('hex'));
           fs.mkdirSync(folder,{mode:0o700});
           const chat='web-'+Date.now().toString(36)+'-'+randomBytes(4).toString('hex');
-          const project={folder,name:data.name.trim(),agentWorkspace:true,chats:[{id:chat,title:'新對話',createdAt:Date.now()}]};
+          const project={folder,name:data.name.trim(),category,agentWorkspace:true,chats:[{id:chat,title:'新對話',createdAt:Date.now()}]};
           saveRoster(ctx(folder,null),[{id:'starter',name:'領頭羊',provider:'claude',level:'worker',model:'claude-opus-5-5'}]);records.push(project);write(projectFile,records);
           write(path.join(home,'team-chat.json'),{folder,name:project.name,chatId:chat,requestId:randomUUID()});
           rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/task-action'){
+          if(!data.project||!data.chat)throw failure('請指定任務所在的專案與對話。');
+          const run=(_command,args)=>config.core?config.core(args):JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin/hc'),args,{encoding:'utf8',timeout:4000,maxBuffer:1024*1024}));
+          const result=actOnChatTask({...c,run},data);
+          lastMessages.delete(p.id+':'+chat+':'+data.id);
+          json(200,result);return;
+        }
+        if(route==='/api/project-category'){
+          const category=categoryName(data.category);
+          const categories=read(categoriesFile,{});
+          if(data.action==='remove'){
+            if(!category||category!==p.category)throw failure('分類已變更，請重新整理。',409);
+            for(const project of projects())if(project.category===category)categories[project.id]='';
+          }else if(data.action==='set'){
+            categories[p.id]=category;
+          }else throw failure('分類操作無效。');
+          write(categoriesFile,categories);
+          json(200,{category:data.action==='remove'?'':category});return;
+        }
         if(route==='/api/notifications'){
           if(data.action==='subscribe'){json(200,push.add(data.subscription,p.id,chat));return;}
           if(data.action==='unsubscribe'){json(200,push.remove(data.endpoint));return;}

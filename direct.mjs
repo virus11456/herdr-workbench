@@ -13,11 +13,88 @@ function actionable(text,match){
  if(fence)return false;const line=before.slice(before.lastIndexOf('\n')+1);if(line.trimStart().startsWith('>')||(line.match(/`/g)||[]).length%2)return false;return true;
 }
 export function enqueueDirect(c,agentId,text,id){
+ return withState(c,()=>enqueueDirectLocked(c,agentId,text,id));
+}
+function enqueueDirectLocked(c,agentId,text,id){
  const agent=roster(c).find(a=>a.id===agentId);if(!agent)throw Error('找不到這位專案代理。');
  if(typeof text!=='string'||!text.trim()||text.length>12000||!/^[a-f0-9-]{36}$/.test(id||''))throw Error('Invalid direct message.');
  const dir=path.join(c.teamDir,'direct-queue');
- for(const suffix of ['.json','.json.sent']){const old=read(path.join(dir,id+suffix));if(old){if(old.agentId!==agentId||old.text!==text)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:true,target:agentId,direct:true};}}
+ for(const suffix of ['.json.cancelled','.json.stopped','.json.sent','.json']){const old=read(path.join(dir,id+suffix));if(old){if(old.agentId!==agentId||old.text!==text)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix==='.json',target:agentId,direct:true,status:queueStatus(suffix)};}}
  save(path.join(dir,id+'.json'),{id,agentId,text,createdAt:Date.now()});log(c,'你',text,'user',{messageId:id,target:agentId,direct:true,delivery:'queued'});return{id,queued:true,target:agentId,direct:true};
+}
+function queueStatus(suffix){
+ return ({'.json':'queued','.json.sent':'sent','.json.cancelled':'cancelled','.json.stopped':'stopped'})[suffix];
+}
+const validMessageId=id=>typeof id==='string'&&/^[a-f0-9-]{36}$/.test(id);
+const taskConflict=message=>Object.assign(Error(message),{status:409});
+const queueFile=(c,id,direct)=>path.join(c.teamDir,direct?'direct-queue':'chat-queue',id+'.json');
+
+function activeDirectTask(binding,item,terminal){
+ return binding?.awaitingReply===true&&binding.delivered===true&&!binding.activeJob&&!binding.retired&&
+  binding.lastMessageId===item.id&&binding.agentId===item.agentId&&
+  terminal?.state==='live'&&terminal.status?.app&&terminal.status.state==='working'&&
+  Number.isSafeInteger(binding.turnAtDelivery)&&terminal.turn===binding.turnAtDelivery;
+}
+
+export function chatTaskControls(c,messages,terminals,bindings){
+ const actions={};
+ const receiving=new Set(Object.values(bindings).filter(b=>b.awaitingReply).map(b=>b.lastMessageId));
+ const legacyAttempt=read(path.join(c.teamBase,'chat-delivery.json'));
+ for(const m of messages.filter(m=>m.kind==='user'&&validMessageId(m.messageId)).slice(-100)){
+  const id=m.messageId,file=queueFile(c,id,m.direct);
+  if(fs.existsSync(file+'.cancelled'))actions[id]='cancelled';
+  else if(fs.existsSync(file+'.stopped'))actions[id]='stopped';
+  else if(fs.existsSync(file)&&!fs.existsSync(file+'.sent')&&!receiving.has(id)&&legacyAttempt?.messageId!==id)actions[id]='cancel';
+  else if(m.direct&&fs.existsSync(file+'.sent')&&terminals.some(t=>activeDirectTask(bindings[t.address],{id,agentId:m.target},t)))actions[id]='stop';
+ }
+ return actions;
+}
+
+export function actOnChatTask(c,{id,action}){
+ if(!validMessageId(id)||!['cancel','stop'].includes(action))throw Error('任務操作無效。');
+ return withState(c,()=>{
+  const lock=path.join(c.teamBase,'chat-delivery.lock');
+  let fd;
+  try{fd=fs.openSync(lock,'wx',0o600);}catch(error){
+   if(error.code==='EEXIST')throw taskConflict('任務正在交付，請更新狀態後再試。');
+   throw error;
+  }
+  try{
+   const direct=queueFile(c,id,true),legacy=queueFile(c,id,false);
+   const archive=action==='cancel'?'.cancelled':'.stopped';
+   if(fs.existsSync(direct+archive)||(action==='cancel'&&fs.existsSync(legacy+archive)))return{status:action==='cancel'?'cancelled':'stopped'};
+   const file=action==='stop'||fs.existsSync(direct)?direct:legacy;
+   if(action==='cancel'){
+    const queued=read(file);
+    if(!queued||queued.id!==id||queued.collaborationId||fs.existsSync(file+'.sent'))throw taskConflict('這筆任務已交付或已變更，無法取消。');
+    const bindings=read(path.join(c.teamDir,'direct-bindings.json'))||{};
+    const legacyAttempt=read(path.join(c.teamBase,'chat-delivery.json'));
+    if(Object.values(bindings).some(b=>b.lastMessageId===id&&b.awaitingReply)||legacyAttempt?.messageId===id)throw taskConflict('這筆任務的交付結果待核對，請先查看代理狀態。');
+    fs.renameSync(file,file+archive);
+    return{status:'cancelled'};
+   }
+   const item=read(file+'.sent');
+   if(!item||item.id!==id||item.collaborationId)throw taskConflict('找不到已交付的直接聊天任務。');
+   const bindingFile=path.join(c.teamDir,'direct-bindings.json'),bindings=read(bindingFile)||{};
+   const matches=Object.entries(bindings).filter(([,b])=>!b.retired&&b.lastMessageId===id&&b.agentId===item.agentId&&b.awaitingReply);
+   if(matches.length!==1)throw taskConflict('這筆任務已結束或回合已變更。');
+   const [terminalId,binding]=matches[0];
+   const terminal=directTerminal(c,terminalId)?.t;
+   if(!activeDirectTask(binding,item,terminal))throw taskConflict('無法確認這筆任務仍在執行，請查看代理狀態。');
+   let result,after;
+   try{
+    result=c.run('hc',['interrupt',terminalId,'--timeout','2']);
+    after=directTerminal(c,terminalId)?.t;
+   }catch{throw taskConflict('停止結果尚未確認，請查看代理狀態。');}
+   if(!['stopped','exited'].includes(result?.outcome)||!(after?.state==='finished'||after?.state==='live'&&['idle','done'].includes(after.status?.state))){
+    throw taskConflict('停止結果尚未確認，請查看代理狀態。');
+   }
+   fs.renameSync(file+'.sent',file+archive);
+   binding.awaitingReply=false;
+   save(bindingFile,bindings);
+   return{status:'stopped'};
+  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+ });
 }
 export function directTerminal(c,id){
  const binding=read(path.join(c.teamDir,'direct-bindings.json'))?.[id];if(!binding||binding.chat!==(c.chat||'legacy')||!/^t[a-z0-9]+$/.test(id||''))return null;
@@ -33,6 +110,7 @@ export function retryDirect(c,agentId){return withState(c,()=>{
 export function directReply(c,text,key,model){return withState(c,()=>saveDirectReply(c,text,key,model));}
 function saveDirectReply(c,text,key,model){
  const actual=directTerminal(c,c.terminal);if(!actual)return{captured:false};
+ if(validMessageId(actual.binding.lastMessageId)&&fs.existsSync(queueFile(c,actual.binding.lastMessageId,true)+'.stopped'))return{captured:false,reason:'stopped_turn'};
  if(typeof text!=='string'||!text.trim())return{captured:false};
  const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file),hash=createHash('sha256').update(key+'\n'+text).digest('hex');
  if(bindings[c.terminal].captureHash===hash)return{captured:false,reason:'duplicate'};
@@ -99,9 +177,9 @@ function collaborationPrompt(c,agentId){const jobs=read(path.join(c.teamDir,'col
 export function drainDirect(c){return withState(c,()=>sendDirect(c));}
 function sendDirect(c){
  const dir=path.join(c.teamDir,'direct-queue');if(!fs.existsSync(dir))return{sent:0};
- const queue=fs.readdirSync(dir).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(name=>({name,...read(path.join(dir,name))})).sort((a,b)=>a.createdAt-b.createdAt);if(!queue.length)return{sent:0};
  const lock=path.join(c.teamBase,'chat-delivery.lock');let fd;try{fd=fs.openSync(lock,'wx',0o600);}catch(e){if(e.code==='EEXIST')return{sent:0};throw e;}
  try{
+  const queue=fs.readdirSync(dir).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(name=>({name,...read(path.join(dir,name))})).sort((a,b)=>a.createdAt-b.createdAt);
   const agents=roster(c),seen=new Set();let blocked;
   for(const item of queue){if(seen.has(item.agentId))continue;seen.add(item.agentId);const agent=agents.find(a=>a.id===item.agentId);if(!agent){blocked={sent:0,reason:'agent_removed'};continue;}
   // Discover real sessions; a conversation never requires a coordinator startup.
@@ -119,7 +197,7 @@ function sendDirect(c){
   if(bindings[id].activeJob){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
   const lease=read(path.join(c.teamDir,'direct-delivery.json'));if(lease?.terminal===id&&bindings[id].awaitingReply!==false&&Date.now()-lease.time<10000){blocked={sent:0,reason:'delivery_settling'};continue;}
   const prompt=`你是 ${agent.name}，這是使用者直接與你的對話，不經固定總控轉交。職責：${agent.brief}。只處理授權範圍。${collaborationPrompt(c,agent.id)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
-  bindings[id].awaitingReply=true;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();save(file,bindings);
+  bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
   if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
 
   c.run('hc',['send',id,prompt]);bindings[id].delivered=true;save(file,bindings);save(path.join(c.teamDir,'direct-delivery.json'),{terminal:id,time:Date.now()});fs.renameSync(path.join(dir,item.name),path.join(dir,item.name+'.sent'));log(c,'系統','訊息已直接送到 '+agent.name+'。','delivery',{messageId:item.id,delivery:'sent',target:agent.id,direct:true});return{sent:1,terminal:id};

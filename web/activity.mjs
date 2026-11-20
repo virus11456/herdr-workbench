@@ -11,10 +11,10 @@ export function agentActivity(terminal,{pending=false,starting=false}={}){
  return '';
 }
 
-export function replyProgress({messages=[],agentId=null,terminal,name='領頭羊',posting=false,stopped=false}){
+export function replyProgress({messages=[],agentId=null,terminal,name='領頭羊',posting=false,stopped=false,taskControls={}}){
  if(posting)return{phase:'sending',text:'正在傳送訊息',animate:true};
  const belongs=m=>agentId?m.direct&&m.target===agentId:!m.direct;
- const user=messages.findLast(m=>m.kind==='user'&&belongs(m));if(!user)return null;
+ const user=messages.findLast(m=>m.kind==='user'&&belongs(m));if(!user||['cancelled','stopped'].includes(taskControls[user.messageId]))return null;
  const delivery=messages.findLast(m=>m.kind==='delivery'&&m.messageId===user.messageId&&m.delivery==='sent');
  const replied=delivery&&messages.some(m=>m.kind==='reply'&&belongs(m)&&(m.replyTo?m.replyTo===user.messageId:Date.parse(m.time)>=Date.parse(delivery.time)));
  if(replied&&!terminal?.waitingCollaboration&&terminal?.status?.state!=='working')return null;
