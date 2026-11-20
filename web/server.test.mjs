@@ -1,6 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {saveRoster,context} from '../team-runtime.mjs';
 import {createServer} from './server.mjs';
+test('a kept login shell is parked rather than a connected or starting agent; permission prompts are not parked',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-parked-')),home=path.join(root,'app'),folder=path.join(root,'project');fs.mkdirSync(home);fs.mkdirSync(folder);fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Parked fixture',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
+ const c=context(folder,null,null,'unit-chat');fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitparked',phase:'active'}));let actual={address:'tunitparked',state:'live',foreground:{argv:['/bin/zsh','-l']},status:null};
+ const server=createServer({allowedLogin:'owner@example.test',origin:'https://unit.tail.test',appHome:home,core:args=>args[0]==='get'?actual:{terminals:[]}});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(root,{recursive:true,force:true});});
+ const read=async()=>await(await fetch('http://127.0.0.1:'+server.address().port+'/api/state',{headers:{'Tailscale-User-Login':'owner@example.test'}})).json();let s=await read();assert.equal(s.coordinatorParked,true);assert.equal(s.terminals[0].parked,true);assert.equal(s.coordinatorReady,false);
+ actual={...actual,foreground:{argv:['/bin/sh','-c','herdr-team-lead']}};s=await read();assert.equal(s.coordinatorParked,false);
+ actual={...actual,status:{app:'claude-code',state:'blocked'}};s=await read();assert.equal(s.coordinatorParked,false);assert.equal(s.coordinatorReady,true);
+});
 test('web bridge enforces Tailnet identity, origin, CSRF and registered project scope',async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-web-unit-'));const app=path.join(dir,'app'),project=path.join(dir,'project');fs.mkdirSync(app);fs.mkdirSync(project);
  fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[{folder:project,name:'Unit project',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));

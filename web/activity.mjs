@@ -1,3 +1,7 @@
+export function agentConnected(terminal){
+ return terminal?.state==='live'&&!!terminal.status?.app&&['idle','done','working'].includes(terminal.status.state);
+}
+
 export function agentActivity(terminal,{pending=false,starting=false}={}){
  if(terminal?.state==='finished')return '';
  if(terminal?.status?.state==='blocked'||terminal?.status?.state==='error')return '';

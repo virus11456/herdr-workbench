@@ -1,9 +1,9 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
-import {agentActivity,replyProgress} from './activity.mjs';
+import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-direct16';
+const UI_BUILD='20261120-direct17';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -50,7 +50,7 @@ document.documentElement.addEventListener('pointerleave',resetSheep);window.addE
 
 const currentAgent=()=>state?.agents.find(a=>a.id===selectedAgent);
 const terminalFor=a=>state?.terminals.findLast(t=>t.agentId===a.id&&t.direct&&(!t.provider||t.provider===a.provider))||state?.terminals.findLast(t=>t.agentId===a.id&&!t.direct&&(!t.provider||t.provider===a.provider));
-const status=t=>!t?'可開始對話':t.state==='finished'?'已結束':t.waitingCollaboration?'等待協作回報':!t.status?.app&&typeof t.status!=='string'?'啟動中，請查看主機提示':({working:'處理中',blocked:'等待你確認',idle:'待命',done:'回合結束',error:'發生錯誤'}[typeof t.status==='string'?t.status:t.status?.state]||'已啟動 · 狀態未回報');
+const status=t=>!t?'可開始對話':t.state==='finished'?'已結束':t.parked?'待命，收到訊息後啟動':t.waitingCollaboration?'等待協作回報':!t.status?.app&&typeof t.status!=='string'?'啟動中，請查看主機提示':({working:'處理中',blocked:'等待你確認',idle:'待命',done:'回合結束',error:'發生錯誤'}[typeof t.status==='string'?t.status:t.status?.state]||'已啟動 · 狀態未回報');
 const agentStatus=(a,t)=>!t&&state?.pendingAgents?.includes(a.id)?'啟動中':status(t);
 const activityFor=(a,t)=>agentActivity(t,{pending:!!a&&state?.pendingAgents?.includes(a.id),starting:!a&&state?.control?.phase==='starting'});
 function animateSheep(node,activity){node.classList.toggle('is-starting',activity==='starting');node.classList.toggle('is-working',activity==='working');}
@@ -91,7 +91,7 @@ function renderNav(){
   const b=el('button','member'+(active?' active':''));b.type='button';b.setAttribute('aria-pressed',String(active));
   const sheep=avatar(provider);animateSheep(sheep,activity);b.append(sheep);
   const copy=el('span','member-copy');copy.append(el('span','member-name',name),el('div','member-sub',subtitle));b.append(copy);
-  if(terminal?.state==='live'||activity){const dot=el('span','live-dot'+(activity?' is-busy':''));dot.setAttribute('aria-hidden','true');if(terminal?.status?.state==='blocked')dot.classList.add('is-blocked');b.append(dot);}b.onclick=action;nav.append(b);
+  const connected=agentConnected(terminal),dot=el('span','live-dot'+(connected?' is-connected':'')+(connected&&activity?' is-busy':''));dot.setAttribute('aria-hidden','true');dot.title=connected?'已連線':'未連線';b.append(dot);b.onclick=action;nav.append(b);
  };
  for(const project of state?.projects||[]){
   const members=project.id===selection.project?state.agents:(project.agents||[]);
@@ -115,6 +115,7 @@ function render(){
  $('edit-agent').hidden=false;
  $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):state.startupStopped?'總控啟動已停止，等待你重新開啟':agent?`${providerName(agent.provider)} · ${agentStatus(agent,live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
  $('retry-start').hidden=agent?!(state.stoppedAgents||[]).includes(agent.id):!state.startupStopped;$('retry-start').textContent=agent?'重新開啟代理':'重新開啟總控';
+ if(!agent&&state.coordinatorParked&&!state.coreError&&state.appOpen)$('status').textContent='領頭羊待命，收到訊息後續接會話';
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+(state.agentWorkspace?0:1)} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
  const tasks=state.checklist?.items||[],taskStamp=JSON.stringify([selection,state.checklist]);

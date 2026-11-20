@@ -1,8 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {agentActivity,replyProgress} from './activity.mjs';
+import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 const terminal={state:'live',status:{app:'codex',state:'working'}},base={agentId:'engineer',name:'工程師',terminal};
 const user={kind:'user',direct:true,target:'engineer',messageId:'message-1',time:'2026-11-20T00:00:00Z'};
 const delivery={kind:'delivery',delivery:'sent',messageId:'message-1',time:'2026-11-20T00:00:01Z'};
+test('only a ready real CLI gets a green connection light; shells, blocked, error and exited agents stay gray',()=>{
+ assert.equal(agentConnected(null),false);assert.equal(agentConnected({state:'live',status:null}),false);
+ for(const state of ['working','idle','done'])assert.equal(agentConnected({state:'live',status:{app:'codex',state}}),true);
+ for(const state of ['blocked','error'])assert.equal(agentConnected({state:'live',status:{app:'codex',state}}),false);
+ assert.equal(agentConnected({...terminal,state:'finished'}),false);
+});
 test('activity follows real work, pending startup, blocked and completed states',()=>{
  assert.equal(agentActivity(terminal),'working');assert.equal(agentActivity(null,{pending:true}),'starting');
  assert.equal(agentActivity({...terminal,status:{app:'codex',state:'blocked'}},{pending:true}),'');
