@@ -1,8 +1,64 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import {context,saveRoster,captureReply,switchAgentModel,roster,appointAgent} from './team-runtime.mjs';import {enqueueDirect,drainDirect,collaborate,drainCollaboration,directReply,retryDirect} from './direct.mjs';import {agyReply} from './agy-reply.mjs';import {createHash} from 'node:crypto';
+import {context,saveRoster,captureReply,switchAgentModel,roster,appointAgent,enqueueChat,drainChats} from './team-runtime.mjs';import {enqueueDirect,drainDirect,collaborate,drainCollaboration,directReply,retryDirect} from './direct.mjs';import {agyReply} from './agy-reply.mjs';import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {minimaxReply} from './minimax-reply.mjs';
 function fixture(t){const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-direct-unit-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const c=context(root,null,null,'unit-chat',{headless:true,stateRoot:path.join(root,'private')});saveRoster(c,[{id:'engineer',name:'Engineer',provider:'codex',level:'worker'}]);return{c,root};}
+for(const direct of [false,true])test(`only the ${direct?'appointed':'legacy'} leader can provision one specialist for an authorized message and verify its report`,t=>{
+ const {c}=fixture(t),leader='tunitlead',worker='tunitworker',messageId='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+ const cases={
+  [leader]:{app:'claude-code',state:'idle',labels:direct?{'team.direct':'true','team.chat':c.chat,'team.agent':'engineer'}:{}},
+ };
+ const sent=[];
+ c.run=(_cmd,[verb,id,...args])=>{
+  if(verb==='get')return{address:id,cwd:c.cwd,state:'live',parent:null,status:{app:cases[id].app,state:cases[id].state},labels:cases[id].labels};
+  if(verb==='send'){sent.push({id,text:args[0]});return{ok:true};}
+  if(verb==='read')return{text:'Verified answer: 42'};
+  if(verb==='run'){
+   assert.equal(cases[worker],undefined);
+   assert(args.at(-1).endsWith('/herdr-team-codex'));
+   const agent=roster(c).find(a=>a.name==='Arithmetic checker');
+   assert(args.includes('team.agent='+agent.id));
+   cases[worker]={app:'codex',state:'blocked',labels:{'team.direct':'true','team.chat':c.chat,'team.agent':agent.id}};
+   return{address:worker};
+  }
+  assert.fail('Unexpected Core command: '+verb);
+ };
+ const current={...c,terminal:leader},jobFile=path.join(c.teamDir,'collaborations.json');
+ const request=(name,message=messageId)=>'<herdr-action>'+JSON.stringify({action:'create-agent-and-delegate',messageId:message,name,provider:'codex',brief:'Check small calculations independently',task:'Compute 21+21',acceptance:'Report the result as 42'})+'</herdr-action>';
+ const reply=text=>captureReply({hook_event_name:'Stop',last_assistant_message:text},current,'Claude');
+ fs.mkdirSync(c.teamDir,{recursive:true});
+ if(direct){
+  assert.throws(()=>enqueueDirect(c,'engineer','No authorization for worker',messageId,true),/領頭羊/);
+  appointAgent(c,'engineer');
+  fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[leader]:{agentId:'engineer',provider:'claude',chat:c.chat}}));
+ }else fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:leader}));
+ assert.throws(()=>collaborate(current,{action:'create-agent-and-delegate',messageId}),/開啟新增代理/);
+ reply(request('Unauthorized specialist'));
+ assert.equal(fs.existsSync(jobFile),false);
+ if(direct){enqueueDirect(c,'engineer','Hire one arithmetic checker',messageId,true);assert.equal(drainDirect(c).sent,1);}
+ else{enqueueChat(c,'Hire one arithmetic checker',messageId,true);assert.equal(drainChats(c).sent,1);}
+ assert(sent.at(-1).text.includes(messageId));
+ reply('我會安排核對。\n'+request('Arithmetic checker')+'\n'+request('Too many'));
+ const jobs=()=>Object.values(JSON.parse(fs.readFileSync(jobFile,'utf8'))),job=()=>jobs()[0];
+ assert.equal(jobs().length,1);assert.equal(job().status,'provisioning');assert.equal(roster(c).length,1);
+ reply(request('Replayed request'));
+ assert.equal(drainDirect(c).started,worker);
+ assert.equal(jobs().length,1);
+ assert.match(roster(c).find(a=>a.id===job().targetAgent).brief,/independently/);
+ assert.equal(job().status,'queued');
+ assert.equal(drainDirect(c).reason,'agent_not_ready');
+ assert.equal(sent.length,1);
+ cases[worker].state='idle';assert.equal(drainDirect(c).sent,1);
+ assert(sent.at(-1).text.includes('Report the result as 42'));assert(sent.at(-1).text.includes('本則訊息沒有新增代理的授權'));
+ assert.equal(job().status,'working');
+ directReply({...c,terminal:worker},'Verified answer: 42\n'+request('Unauthorized child'),'worker-result');
+ assert.equal(jobs().length,1);assert.equal(job().status,'awaiting_review');
+ assert.throws(()=>collaborate(current,{action:'accept',id:job().id,revision:job().revision,verification:'Verified the arithmetic'}),/終端核對/);
+ assert.equal(drainCollaboration(c).sent,1);assert.equal(sent.at(-1).id,leader);
+ reply('驗收完成。\n<herdr-action>'+JSON.stringify({action:'accept',id:job().id,revision:job().revision,verification:'Verified that 21+21 equals 42',evidence:[]})+'</herdr-action>');
+ assert.equal(job().status,'done');assert.equal(job().evidence[0].type,'terminal-read');
+ assert.equal(roster(c).length,2);
+});
 test('direct conversation starts its selected engine once, needs no coordinator, and reuses its session',t=>{
  const {c}=fixture(t),calls=[],terminals=[];let state='idle';
  c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='ls')return{terminals};if(args[0]==='run'){assert(args.at(-1).endsWith('/herdr-team-codex'));assert(!args.includes('herdr-codex-implement'));assert(args.includes('--no-parent'));terminals.push({address:'tunitdirect'});return{address:'tunitdirect'};}if(args[0]==='get')return{address:args[1],cwd:c.cwd,parent:null,state:'live',status:{app:'codex',state},labels:{'team.direct':'true','team.agent':'engineer','team.chat':c.chat}};if(args[0]==='send')return{ok:true};throw Error('Unexpected command');};

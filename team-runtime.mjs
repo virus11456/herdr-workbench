@@ -1,6 +1,6 @@
 import {projectMemoryPrompt} from './project-memory.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
-import {drainDirect,directReply,drainCollaboration,directTerminal} from './direct.mjs';
+import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState} from './direct.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,17 +13,25 @@ export const recoverable = new Set(['rate_limit', 'server_error', 'authenticatio
 export const claudeModels = {'claude-opus-5-5':'Opus 5.5', 'claude-fable-5-2':'Fable 5.2'};
 export const defaultRoster = () => [];
 export function coordinatorProfile(c) {return read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json')) || {name:'領頭羊'};}
+export function canCreateAgent(c, agentId) {
+  if(!c.privateState)return false;
+  const appointed=coordinatorProfile(c).agentId;
+  const leader=appointed||(roster(c).some(a=>a.id==='starter')?'starter':null);
+  return (agentId||null)===leader;
+}
 export function missingTerminal(error) {
  try{return (error?.error?.kind||JSON.parse(String(error?.stdout||error?.stderr||'{}')).error?.kind)==='not_found';}catch{return false;}
 }
 export function setCoordinatorName(c,name) {
  if(typeof name!=='string'||!name.trim()||name.trim().length>40||/[\x00-\x1f\x7f]/.test(name))throw Error('名稱需為 1–40 字，且不得包含控制字元。');
- const profile={...coordinatorProfile(c),name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;
+ return withRosterState(c,()=>{const profile={...coordinatorProfile(c),name:name.trim()};save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return profile;});
 }
 export function appointAgent(c,agentId){
+ return withRosterState(c,()=>{
  const agent=roster(c).find(a=>a.id===agentId);if(!agent)throw Error('請選擇這個專案已加入的代理。');
  saveRoster(c,roster(c).map(a=>a.id===agentId?{...a,provider:'claude',model:'claude-opus-5-5',level:'manager'}:a));
  const profile={...coordinatorProfile(c),agentId:agent.id,name:agent.name,managerModel:'claude-opus-5-5'};save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),profile);return{...profile,started:false,providerChanged:agent.provider!=='claude'};
+ });
 }
 const workerTemplates = {claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn',antigravity:'herdr-antigravity-task'};
 export function validateRoster(value) {
@@ -44,9 +52,13 @@ export function validateRoster(value) {
 }
 export function roster(c) { return validateRoster(read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json')) ?? read(path.join(teamDir(c),'roster.json')) ?? defaultRoster()); }
 export function saveRoster(c,value) {
-  const agents=validateRoster(value);if(roster(c).some(a=>a.id==='starter')&&!agents.some(a=>a.id==='starter'))throw Error('預設領頭羊不能刪除；可以改名、設定模型或另外任命協調者。');save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
-  const profile=coordinatorProfile(c);if(profile.agentId){const selected=agents.find(a=>a.id===profile.agentId);save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),{...profile,agentId:selected?.id||null,...(selected?{name:selected.name}:{})});}
-  return {agents,saved:true,started:false};
+  return withRosterState(c,()=>{
+    const current=roster(c),agents=validateRoster(typeof value==='function'?value(current):value);
+    if(current.some(a=>a.id==='starter')&&!agents.some(a=>a.id==='starter'))throw Error('預設領頭羊不能刪除；可以改名、設定模型或另外任命協調者。');
+    save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
+    const profile=coordinatorProfile(c);if(profile.agentId){const selected=agents.find(a=>a.id===profile.agentId);save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),{...profile,agentId:selected?.id||null,...(selected?{name:selected.name}:{})});}
+    return {agents,saved:true,started:false};
+  });
 }
 export function teamBrief(c) {
   return '專案協作：由使用者指定目標、代理與分工，不預設部門、工作順序或引擎職責。專案代理名冊（設定角色不代表已啟動）：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
@@ -90,14 +102,18 @@ export function selectedModel(c) {
 export async function switchAgentModel(c,agentId,model,pause=delay){
  if(!Object.hasOwn(claudeModels,model))throw Error('只能選擇 Opus 5.5 或 Fable 5.2。');
  const agents=roster(c),agent=agents.find(a=>a.id===agentId);if(!agent||agent.provider!=='claude')throw Error('只能為 Claude 代理選擇此模型。');
+ const saveModel=()=>saveRoster(c,current=>{
+  if(!current.some(a=>a.id===agentId&&a.provider==='claude'))throw Error('代理已移動或變更引擎。');
+  return current.map(a=>a.id===agentId?{...a,model}:a);
+ });
  const bindings=read(path.join(teamDir(c),'direct-bindings.json'))||{};let terminal;
  for(const [id,b]of Object.entries(bindings))if(b.agentId===agentId){const t=c.run('hc',['get',id]);if(t.state==='live'&&t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===agentId&&t.labels?.['team.chat']===(c.chat||'legacy'))terminal=t;}
- if(!terminal){saveRoster(c,agents.map(a=>a.id===agentId?{...a,model}:a));return{model,applied:false,message:'已保存，下一次開啟這位代理時使用 '+claudeModels[model]+'。'};}
+ if(!terminal){saveModel();return{model,applied:false,message:'已保存，下一次開啟這位代理時使用 '+claudeModels[model]+'。'};}
  if(!['idle','done'].includes(terminal.status?.state)||!['claude','claude-code'].includes(terminal.status?.app))throw Error('代理尚未待命，請先處理登入、信任或目前工作。');
  c.run('hc',['send',terminal.address,`/model ${model}`]);let confirmed=false;
  for(let i=0;i<32;i++){
   await pause(250);const screen=c.run('hc',['read',terminal.address,'--json','--lines','0']).text||'',at=screen.lastIndexOf(`/model ${model}`);if(at<0)continue;const current=screen.slice(at+`/model ${model}`.length);
-  if(current.includes('Set model to '+claudeModels[model])){saveRoster(c,agents.map(a=>a.id===agentId?{...a,model}:a));const file=path.join(teamDir(c),'agent-models.json');save(file,{...(read(file)||{}),[agentId]:{model,terminal:terminal.address,confirmedAt:new Date().toISOString()}});return{model,applied:true,message:'已確認切換為 '+claudeModels[model]+'。'};}
+  if(current.includes('Set model to '+claudeModels[model])){saveModel();const file=path.join(teamDir(c),'agent-models.json');save(file,{...(read(file)||{}),[agentId]:{model,terminal:terminal.address,confirmedAt:new Date().toISOString()}});return{model,applied:true,message:'已確認切換為 '+claudeModels[model]+'。'};}
   if(!confirmed&&current.includes('Switch model?')&&current.includes(`❯ 1. Yes, switch to ${claudeModels[model]}`)&&/2\. No, go back\s*$/.test(current)){c.run('hc',['keys',terminal.address,'enter']);confirmed=true;}
  }
  throw Error('CLI 尚未確認模型切換成功，請查看主機終端；未標記套用成功。');
@@ -143,7 +159,7 @@ export function context(cwd = process.cwd(), terminal = process.env.HC_TERMINAL_
   if(options.legacyProjects?.includes(root))options={...options,stateRoot:null};
   const teamBase=options.stateRoot ? path.join(options.stateRoot,createHash('sha256').update(root).digest('hex').slice(0,32)) : path.join(root,'.herdr-team');
   const memoryDir=options.appHome?path.join(options.appHome,'project-memory',createHash('sha256').update(root).digest('hex')):teamBase;
-  return {cwd:root,chat,headless:!!options.headless,teamBase,teamDir:path.join(teamBase,...(chat?['conversations',chat]:[])),memoryDir,terminal,
+  return {cwd:root,chat,headless:!!options.headless,privateState:!!options.stateRoot,teamBase,teamDir:path.join(teamBase,...(chat?['conversations',chat]:[])),memoryDir,terminal,
     run:run||((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})))};
 }
 function coreLaunch(c,argv) {
@@ -163,16 +179,17 @@ export function log(c, role, text, kind = role === '你' ? 'user' : 'progress', 
   const p = paths(c);
   fs.appendFileSync(p.messages, JSON.stringify({ ...extra, time: new Date().toISOString(), terminal: c.terminal || null, role: String(role).slice(0, 40), kind, text: String(text).slice(0, 12000) }) + '\n', { mode: 0o600 });
 }
-export function enqueueChat(c, text, id=randomUUID()) {
+export function enqueueChat(c, text, id=randomUUID(), allowAgentCreation=false) {
   const original=String(text).trim(), routed=routeMessage(original,roster(c));
   if (!original) throw new Error('請先輸入訊息。');
   if(!/^[a-f0-9-]{36}$/.test(id))throw Error('Invalid message ID.');
   const dir=path.join(paths(c).dir,'chat-queue');
   for(const suffix of ['.json.cancelled','.json','.json.sent']){
     const existing=read(path.join(dir,id+suffix));
-    if(existing){if(existing.original!==original)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix!=='.json.cancelled',target:existing.target,...(suffix==='.json.cancelled'?{status:'cancelled'}:{})};}
+    if(existing){if(existing.original!==original||!!existing.allowAgentCreation!==allowAgentCreation)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix!=='.json.cancelled',target:existing.target,...(suffix==='.json.cancelled'?{status:'cancelled'}:{})};}
   }
-  save(path.join(dir,`${id}.json`),{id,original,...routed,createdAt:new Date().toISOString(),sequence:process.hrtime.bigint().toString().padStart(24,'0')});
+  if(allowAgentCreation&&(!canCreateAgent(c,null)||routed.target!=='team'))throw Error('請將新增代理的授權交給目前的領頭羊。');
+  save(path.join(dir,`${id}.json`),{id,original,...routed,allowAgentCreation,createdAt:new Date().toISOString(),sequence:process.hrtime.bigint().toString().padStart(24,'0')});
   log(c,'你',original,'user',{messageId:id,delivery:'queued',target:routed.target});
   return {id,queued:true,target:routed.target};
 }
@@ -235,7 +252,9 @@ export function drainChats(c) {
       const routed=routeMessage(msg.original,roster(c));
       if(routed.target!==msg.target)throw Error('Queued recipient changed; refusing to redirect.');
       save(leaseFile,{terminal:control.terminal,time:Date.now(),messageId:msg.id,chat:c.chat});
-      c.run('hc',['send',control.terminal,teamBrief(c)+'\n\n'+routed.text]);
+      const creation=msg.allowAgentCreation&&canCreateAgent(c,null)?msg.id:null;
+      save(path.join(teamDir(c),'legacy-message.json'),{id:msg.id,terminal:control.terminal,creation});
+      c.run('hc',['send',control.terminal,teamBrief(c)+'\n'+agentCreationPrompt(creation)+'\n\n'+routed.text]);
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));
       log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent',provider:t.status.app==='codex'?'codex':'claude'});
       return{sent:1,pending:files.length-1};
@@ -261,6 +280,10 @@ export function captureReply(event, c, role) {
   const text = isClaude ? event.last_assistant_message : event['last-assistant-message'];
   if (typeof text !== 'string' || !text.trim()) return {captured:false};
   if(isClaude && control && /^[a-f0-9-]{36}$/.test(event.session_id||'')) save(path.join(teamDir(c),'control.json'),{...control,sessionId:event.session_id});
+  if(control?.terminal&&control.terminal===c.terminal){
+    const result=legacyCollaborationReply(c,text,role);
+    if(result)return result;
+  }
   log(c, role, text, 'reply');
   return {captured:true};
 }

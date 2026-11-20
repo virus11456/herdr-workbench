@@ -4,7 +4,7 @@ import {createPushStore} from './push.mjs';
 import {artifactReferences,readArtifact} from './artifacts.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
-import {enqueueDirect,retryDirect,chatTaskControls,actOnChatTask} from '../direct.mjs';
+import {enqueueDirect,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -71,10 +71,10 @@ export function createServer(config) {
   const push=createPushStore({home,origin:config.origin,send:config.pushSend});
   const state=async url=>{
     const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,category:p.category,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
-    if(!list.length)return {uiBuild:'20261120-work28',appVersion:'0.7.0-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
+    if(!list.length)return {uiBuild:'20261120-agents29',appVersion:'0.8.0-dev',projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
     const picked=summary.find(p=>p.id===choice.p.id);
-    if(picked&&!picked.available)return{uiBuild:'20261120-work28',appVersion:'0.7.0-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    if(picked&&!picked.available)return{uiBuild:'20261120-agents29',appVersion:'0.8.0-dev',projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -93,11 +93,13 @@ export function createServer(config) {
     const directQueue=path.join(c.teamDir,'direct-queue'),pendingAgents=fs.existsSync(directQueue)?[...new Set(fs.readdirSync(directQueue).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>read(path.join(directQueue,n))?.agentId).filter(Boolean))]:[];
     const owner=terminals.find(t=>t.address===control?.terminal),stoppedAgents=roster(c).filter(a=>{const t=terminals.filter(t=>t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===a.id).at(-1),b=t&&direct[t.address];return t?.state==='finished'&&b&&!b.retired&&!b.retryRequested&&!b.delivered&&!b.captureHash;}).map(a=>a.id);
     const taskList=checklist(c);taskList.items=taskList.items.map(item=>({...item,artifacts:publicArtifacts(item)}));
-    const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c);taskList.items.push(...jobs.map(j=>({id:j.id,title:(members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent)+' → '+(members.find(a=>a.id===j.targetAgent)?.name||j.targetAgent),owner:members.find(a=>a.id===j.sourceAgent)?.name||j.sourceAgent,acceptance:j.acceptance,status:j.status==='done'?'done':j.status==='queued'?'pending':'in_progress',verification:j.verification,evidence:j.evidence||[]})));
+    const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c),profile=coordinatorProfile(c);
+    const name=id=>members.find(a=>a.id===id)?.name||id||profile.name;
+    taskList.items.push(...jobs.map(j=>({id:j.id,title:name(j.sourceAgent)+' → '+(j.newAgent?.name||name(j.targetAgent)),owner:name(j.sourceAgent),acceptance:j.acceptance,status:({done:'done',queued:'pending',provisioning:'pending',failed:'blocked'})[j.status]||'in_progress',verification:j.verification,evidence:j.evidence||[]})));
     const ownerModel=read(path.join(c.teamDir,'model.json')),ownerArgs=owner?.foreground?.argv||owner?.argv||[],modelAt=ownerArgs.indexOf('--model');
     const coordinatorParked=owner?.state==='live'&&!owner.status?.app&&control?.phase==='active'&&/(?:^|\/)(?:zsh|bash|sh|fish|nu)$/.test(ownerArgs[0]||'')&&!ownerArgs.includes('-c');
-    return {uiBuild:'20261120-work28',appVersion:'0.7.0-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!coordinatorProfile(c).agentId,coordinatorAgentId:coordinatorProfile(c).agentId||null,coordinatorName:coordinatorProfile(c).name,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
-      terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&j.status!=='done'),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    return {uiBuild:'20261120-agents29',appVersion:'0.8.0-dev',projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+      terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&!['done','failed'].includes(j.status)),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   const server=http.createServer(async(req,res)=>{
@@ -200,16 +202,25 @@ export function createServer(config) {
         if(route==='/api/message'){if(managementActive(c))throw failure('Agent routing is being updated; retry shortly.',409);
           if(typeof data.text!=='string'||!data.text.trim()||data.text.length>12000)throw failure('請填寫任務（最多 12000 字）。');
           if(typeof data.id!=='string'||!/^[a-f0-9-]{36}$/.test(data.id))throw failure('缺少訊息識別碼。');
+          if(data.allowAgentCreation!==undefined&&typeof data.allowAgentCreation!=='boolean')throw failure('新增代理授權無效。');
+          const allowAgentCreation=data.allowAgentCreation===true;
           const key=p.id+':'+chat+':'+data.id;
           if(lastMessages.has(key)){json(200,lastMessages.get(key));return;}
           // Queue through the existing runtime. This endpoint cannot invoke arbitrary CLI commands.
           const mentioned=roster(c).flatMap(a=>[a.id,a.name].map(alias=>({a,prefix:'@'+alias}))).sort((a,b)=>b.prefix.length-a.prefix.length).find(x=>data.text.startsWith(x.prefix)&&/^[\s：:，,]/.test(data.text.slice(x.prefix.length,x.prefix.length+1)));
           const recipient=mentioned?.a.id||data.agentId,text=mentioned?data.text.slice(mentioned.prefix.length).replace(/^[\s：:，,]+/,''):data.text;
-          const result=recipient?enqueueDirect(c,recipient,text,data.id):enqueueChat(c,text,data.id);rememberSelection(p,chat);lastMessages.set(key,result);
+          const result=recipient?enqueueDirect(c,recipient,text,data.id,allowAgentCreation):enqueueChat(c,text,data.id,allowAgentCreation);rememberSelection(p,chat);lastMessages.set(key,result);
           if(lastMessages.size>1000)lastMessages.delete(lastMessages.keys().next().value);
           json(200,result);return;
         }
-        if(route==='/api/roster'){if(data.rosterRevision!==undefined&&data.rosterRevision!==rosterRevision(c))throw failure('Agent settings changed; reload before saving.',409);if(roster(c).some(a=>!data.agents?.some(b=>b.id===a.id)))throw failure('請由代理的 ⋯ 選單移除設定，以核對執行中工作。');json(200,saveRoster(c,data.agents));return;}
+        if(route==='/api/roster'){
+          const result=withRosterState(c,()=>{
+            if(data.rosterRevision!==undefined&&data.rosterRevision!==rosterRevision(c))throw failure('Agent settings changed; reload before saving.',409);
+            if(roster(c).some(a=>!data.agents?.some(b=>b.id===a.id)))throw failure('請由代理的 ⋯ 選單移除設定，以核對執行中工作。');
+            return saveRoster(c,data.agents);
+          });
+          json(200,result);return;
+        }
         if(route==='/api/chat'){
           const next={folder:p.folder,id:'web-'+Date.now().toString(36)+'-'+randomBytes(4).toString('hex'),title:'新對話',createdAt:Date.now()};
           const extra=read(extraFile,[]);if(extra.length>=1000)throw failure('對話數量已達上限。');extra.push(next);write(extraFile,extra);
