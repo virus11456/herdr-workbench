@@ -4,7 +4,7 @@ import {flock,attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-pasture22';
+const UI_BUILD='20261120-pasture23';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -55,7 +55,7 @@ const status=t=>!t?'可開始對話':t.state==='finished'?'已結束':t.parked?'
 const agentStatus=(a,t)=>!t&&state?.pendingAgents?.includes(a.id)?'啟動中':status(t);
 const activityFor=(a,t)=>agentActivity(t,{pending:!!a&&state?.pendingAgents?.includes(a.id),starting:!a&&state?.control?.phase==='starting'});
 function animateSheep(node,activity){node.classList.toggle('is-starting',activity==='starting');node.classList.toggle('is-working',activity==='working');}
-let progressSnapshot='';
+let progressSnapshot='',conversationViewKey='';
 function renderReplyProgress(){
  const agent=currentAgent(),terminal=agent?terminalFor(agent):state?.terminals.find(t=>t.address===state.control?.terminal),name=agent?.name||state?.coordinatorName||'領頭羊';
  const progress=historyVisible?null:replyProgress({messages:state?.messages,agentId:agent?.id||null,terminal,name,posting,stopped:agent?state?.stoppedAgents?.includes(agent.id):state?.startupStopped});
@@ -166,6 +166,7 @@ function render(){
  $('welcome-description').textContent=agent?agent.brief:'先和協調總控聊聊目標，其他夥伴需要時再加入。';
  const welcomeHeading=$('welcome').querySelector('h2');welcomeHeading.replaceChildren();welcomeHeading.textContent=agent?`交給${agent.name}的下一件事`:'今天，想和羊群完成什麼？';
  const stamp=JSON.stringify([selection,selectedAgent,details,historyVisible,state.coordinatorName,state.agents.map(a=>[a.id,a.name]),state.messagesRevision??messages]);
+ const viewKey=JSON.stringify([selection.project,selection.chat]),openingConversation=viewKey!==conversationViewKey;conversationViewKey=viewKey;
  const container=$('messages'),wasBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<100;
  if(stamp!==messageSnapshot){messageSnapshot=stamp;container.replaceChildren();
  if(details){container.append(el('div','details-note','這個專案自行設定成員與職責，沒有固定部門或工作順序。每位代理都能直接對話，並在你授權後交付協作與驗收。角色設定不代表已啟動，queued 只代表排入等待。'));}
@@ -177,7 +178,7 @@ function render(){
   if(m.time){const time=el('time','message-time',new Date(m.time).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}));role.append(time);}
   bubble.append(role,formatMessage(document,m.text||''));row.append(bubble);if(user)row.append(avatar(null,true));container.append(row);
  }
- if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;}renderReplyProgress();if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;updateSend();
+ if(!openingConversation&&wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;}renderReplyProgress();if(!openingConversation&&wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;if(openingConversation)$('feed').scrollTop=0;updateSend();
 }
 const suggestions=[['釐清目標','先一起想清楚要做什麼','請先協助我釐清這個專案的目標與限制：'],['開始協作','依任務安排適合的成員','請依這個專案已加入的代理與職責，協助以下目標：'],['核對成果','需要時再安排交叉檢查','請檢查以下成果，依需要安排已加入的代理交叉驗證：'],['整理資訊','把零散內容整理清楚','請協助整理以下內容，保留重點、待辦與需要確認的問題：']];
 for(const [title,sub,prompt]of suggestions){const b=el('button','suggestion');b.type='button';b.append(el('strong','',title),el('small','',sub));b.onclick=()=>{$('draft').value=prompt;persistDraft();updateSend();$('draft').focus();};$('suggestions').append(b);}

@@ -1,6 +1,6 @@
-const CACHE='herdr-shell-v22';
+const CACHE='herdr-shell-v23';
 const base=new URL('./',self.location.href);
-const shell=['./','./style.css','./app.js','./format.mjs','./viewport.mjs','./activity.mjs','./tasks.mjs','./style.css?v=20261120-pasture22','./app.js?v=20261120-pasture22','./pasture.svg','./sheep.svg','./shepherd.svg','./app-icon.svg','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./manifest.webmanifest'];
+const shell=['./','./style.css','./app.js','./format.mjs','./viewport.mjs','./activity.mjs','./tasks.mjs','./style.css?v=20261120-pasture23','./app.js?v=20261120-pasture23','./pasture.svg','./sheep.svg','./shepherd.svg','./app-icon.svg','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./manifest.webmanifest'];
 const allowed=new Set(shell.map(p=>new URL(p,base).href));
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);await cache.addAll(shell.map(p=>new Request(new URL(p,base),{cache:'reload'})));await self.skipWaiting();
