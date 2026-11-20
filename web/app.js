@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-tasks26';
+const UI_BUILD='20261120-chat27';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -76,7 +76,7 @@ async function refresh(){
  const n=++revision;const q=new URLSearchParams();if(selection.project)q.set('project',selection.project);if(selection.chat)q.set('chat',selection.chat);
  try{
   const result=await api('state?'+q);if(n!==revision)return;
-  const first=!state;state=result;$('reload-app').hidden=!result.uiBuild||result.uiBuild===UI_BUILD;selection.project=result.project||null;selection.chat=result.chat||null;
+  const first=!state;state=result;selection.project=result.project||null;selection.chat=result.chat||null;
   const link=new URL(location.href);if(selection.project)link.searchParams.set('project',selection.project);if(selection.chat)link.searchParams.set('chat',selection.chat);if(selectedAgent)link.searchParams.set('agent',selectedAgent);else link.searchParams.delete('agent');history.replaceState(null,'',link);
   if(selectedAgent&&!currentAgent())selectedAgent=null;if(state.agentWorkspace&&!selectedAgent)selectedAgent=state.agents.find(a=>a.id===state.coordinatorAgentId)?.id||state.agents[0]?.id||null;
   render();if(first)restoreDraft();
@@ -328,8 +328,6 @@ $('project-rename-form').onsubmit=async e=>{e.preventDefault();try{await api('pr
 $('agent-provider').onchange=()=>{$('agent-model-label').hidden=!editing||$('agent-provider').value!=='claude';};
 
 $('appoint-agent').onclick=async()=>{try{const result=await api('appoint',{agentId:editing});$('agent-dialog').close();selectedAgent=editing;notice(result.providerChanged?'已任命協調者；依你的設定，管理者下次使用 Claude Opus 5.5。':result.modelApplied?'已任命協調者，CLI 已確認使用 Opus 5.5。':'已任命協調者，下次開啟使用 Opus 5.5。');await refresh();}catch(error){notice(error.message);}};
-
-$('reload-app').onclick=()=>{persistDraft();location.reload();};
 
 $('rename-cancel').onclick=()=>$('rename-dialog').close();
 $('rename-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const id=e.currentTarget.dataset.agent,name=$('rename-name').value.trim();if(id==='__coordinator__')await api('coordinator',{name});else await api('roster',{rosterRevision:state.rosterRevision,agents:state.agents.map(a=>a.id===id?{...a,name}:a)});$('rename-dialog').close();await refresh();notice('名稱已保存。');}catch(error){$('rename-error').textContent=error.message;}finally{b.disabled=false;}};
