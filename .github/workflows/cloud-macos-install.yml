@@ -113,4 +113,5 @@ jobs:
           for module_file in project-memory.mjs direct.mjs team-runtime.mjs; do
             cmp "$module_file" "$HOME/.config/herdr-workbench/$module_file"
           done
+          npm ci --ignore-scripts --no-audit --no-fund
           npm test
