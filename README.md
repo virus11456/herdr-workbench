@@ -60,6 +60,8 @@ node setup.mjs --origin https://your-host.your-tailnet.ts.net --login owner@exam
 
 安裝範圍也包含官方回覆 hook：Claude 的工作台專用設定、Codex 的單次會話 notify，以及 Google `~/.gemini/config/hooks.json`、MiniMax `~/.minimax/hooks.json`。既有內容先備份、保留其他 hook；不替使用者開啟原本停用的 MiniMax 全域 hooks。這些介面只接收已登記的真實代理回覆與限定的專案協作動作，不修改工具權限、信任或沙箱。
 
+0.8.9-dev 已在全新 macOS 15（Apple Silicon）雲端虛擬機使用公開 ZIP 實際安裝。驗收包含官方 CLI、兩個使用者 LaunchAgent、四個 Core 範本與本機工作台；登入、Drive、Tailscale 跨裝置連線和重開機仍需實機驗證。[雲端安裝驗收](https://github.com/virus11456/herdr-workbench/actions/runs/44891610479)
+
 安裝目錄為 `~/.config/herdr-workbench/`，Web 預設埠 `48724`。兩個使用者 LaunchAgent 是 `dev.herdr.workbench-web` 與 `dev.herdr.workbench-queue`。登入 macOS 後自動執行；主機仍需開機且保持登入，不會自動更改睡眠設定或取得管理員權限。
 
 ### Tailscale 私人入口
@@ -186,7 +188,7 @@ Claude 與 Antigravity 在新版啟動器開啟的會話收集額度，原先已
 
 通知採 Web Push，可在 PWA 關閉時由裝置服務接收，仍受系統通知設定、網路與省電機制影響。主機每 15 秒檢查已訂閱對話的真實 blocked 狀態，同一等待事件只提醒一次；解除後再次等待才重新提醒。通知只顯示通用確認文字，不傳送對話內容、任務名稱或登入資料。加密推播經裝置的 Apple／Google／Mozilla／Microsoft 服務傳送；私人介面仍維持 loopback＋Tailscale，沒有開啟 Funnel。
 
-已在一台 iPhone 實測，從應用程式切換器完全滑掉 Herdr 後，主機發送的測試通知仍可送達。此驗收只確認該裝置和測試通知。
+已在一台 iPhone 實測，從應用程式切換器完全滑掉 Herdr 後，主機發送的測試通知仍可送達，點開也能回到原對話。此驗收只確認該裝置和測試通知。
 
 VAPID 私鑰與裝置訂閱只保存在主機本機 `notifications/`，不在 Drive、GitHub 或安裝包內。安裝器使用鎖定版本的 `npm ci --omit=dev --ignore-scripts` 安裝 web-push 依賴；需要 Node.js 隨附的 npm 及網路。沒有預設替使用者開啟通知。
 
