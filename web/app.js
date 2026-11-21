@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-usage33';
+const UI_BUILD='20261121-quota34';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -420,26 +420,38 @@ $('remove-project-category').onclick=()=>{
 let memoryRevision=0;
 const usageNumber=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:2});
 let usageSnapshot='';
+const quotaDate=seconds=>new Date(seconds*1000).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const quotaPeriod=minutes=>minutes%1440===0?minutes/1440+' 天':minutes%60===0?minutes/60+' 小時':minutes+' 分鐘';
+const quotaBucket={'gemini-weekly':'Gemini 每週','3p-weekly':'第三方模型每週'};
 function renderUsage(){
- const list=$('conversation-usage'),snapshot=JSON.stringify(state?.usage||[]);
+ const list=$('conversation-usage'),quotaList=$('account-quotas'),usage=state?.usage||[];
+ const codex=usage.find(row=>row.provider==='codex')?.quota;
+ const quotas=[...(state?.accountQuotas||[]),...(codex?[{provider:'codex',...codex}]:[])];
+ const snapshot=JSON.stringify([usage,quotas]);
  if(snapshot===usageSnapshot)return;
- usageSnapshot=snapshot;list.replaceChildren();
- if(!state?.usage?.length){
+ usageSnapshot=snapshot;list.replaceChildren();quotaList.replaceChildren();
+ if(!quotas.length)quotaList.append(el('p','','尚未收到可顯示的額度。'));
+ for(const {provider,observedAt,windows} of quotas){
+  const group=el('dl');
+  group.append(el('dt','',providers[provider]));
+  for(const w of windows){
+   const period=w.bucket?(Object.hasOwn(quotaBucket,w.bucket)?quotaBucket[w.bucket]:w.bucket):quotaPeriod(w.windowMinutes);
+   const remaining=w.remainingPercent??100-w.usedPercent;
+   group.append(el('dd','',period+' · 剩餘 '+usageNumber.format(remaining)+'% · '+quotaDate(w.resetsAt)+' 重設'));
+  }
+  group.append(el('dd','','回報於 '+quotaDate(Date.parse(observedAt)/1000)));
+  quotaList.append(group);
+ }
+ if(!usage.length){
   list.append(el('dt','','這段對話還沒有可統計的送達紀錄。'));return;
  }
- for(const {provider,delivered,replies,measuredTurns,tokens,quota} of state.usage){
+ for(const {provider,delivered,replies,measuredTurns,tokens} of usage){
   list.append(el('dt','',providers[provider]||'未標記引擎'),el('dd','',delivered+' 次送達 · '+replies+' 次回覆'));
   if(tokens){
    const inputLabel=provider==='codex'?'輸入（含快取）':'輸入';
    const labels={input:inputLabel,output:'輸出',cacheRead:'讀取快取',cacheWrite:'寫入快取'};
    const fields=Object.entries(labels).flatMap(([key,label])=>typeof tokens[key]==='number'?[label+' '+usageNumber.format(tokens[key])]:[]);
    list.append(el('dd','usage-tokens',measuredTurns+' 個已記錄回合 · '+fields.join(' · ')+' tokens'));
-  }
-  if(quota){
-   const formatDate=seconds=>new Date(seconds*1000).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-   const label=minutes=>minutes%1440===0?minutes/1440+' 天':minutes%60===0?minutes/60+' 小時':minutes+' 分鐘';
-   const period=quota.windows.map(w=>label(w.windowMinutes)+' 已用 '+usageNumber.format(w.usedPercent)+'%，'+formatDate(w.resetsAt)+' 重設');
-   list.append(el('dd','usage-quota','帳號額度 · '+period.join(' · ')+' · 回報於 '+formatDate(Date.parse(quota.observedAt)/1000)));
   }
  }
 }

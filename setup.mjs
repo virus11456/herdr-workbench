@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';import {randomUUID} from 'n
 import {validateDriveRoot} from './storage.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
 import {hooksSettings} from './team-runtime.mjs';
+import {quotaStatusSettings} from './provider-quota.mjs';
 const source=path.dirname(fileURLToPath(import.meta.url));
 const quote=s=>"'"+String(s).replaceAll("'","'\\''")+"'";
 const xml=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -26,7 +27,7 @@ export function deploymentPlan(input,tools){
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
  try{existingHooks=JSON.parse(fs.readFileSync(agyHooks,'utf8'));if(!existingHooks||typeof existingHooks!=='object'||Array.isArray(existingHooks))throw Error('Invalid hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
  add(agyHooks,JSON.stringify({...existingHooks,'herdr-workbench-reply':{Stop:[{type:'command',command:quote(tools.node)+' '+quote(path.join(home,'agy-reply.mjs')),timeout:10}]}},null,2)+'\n');
@@ -48,7 +49,8 @@ export function deploymentPlan(input,tools){
   add(path.join(core,'templates',name+'.md'),fs.readFileSync(path.join(source,'templates',name+'.md'),'utf8').replaceAll(marker,quote(path.join(bin,command))));
  }
  for(const name of ['server.mjs','artifacts.mjs','usage.mjs','push.mjs','tasks.mjs','agent-management.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','activity.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
- add(path.join(home,'team-claude-settings.json'),JSON.stringify(hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),null,2)+'\n');
+ add(path.join(home,'team-claude-settings.json'),JSON.stringify({...hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),...quotaStatusSettings('claude',home,tools.node)},null,2)+'\n');
+ add(path.join(home,'team-antigravity-settings.json'),JSON.stringify(quotaStatusSettings('antigravity',home,tools.node),null,2)+'\n');
  add(path.join(home,'service.json'),JSON.stringify(config,null,2)+'\n');add(path.join(home,'web/config.json'),JSON.stringify(config,null,2)+'\n');
  if(input.projects)add(path.join(home,'web/projects.json'),JSON.stringify(input.projects,null,2)+'\n');
  const agents=[];
