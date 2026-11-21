@@ -16,7 +16,7 @@ export function minimaxReply(event,home,run){
  const matches=candidates.some(x=>x.known)?candidates.filter(x=>x.known):candidates;
  if(matches.length!==1)return{captured:false,reason:matches.length?'ambiguous_terminal':'no_matching_terminal'};
  const c=matches[0].c,model=typeof event.model==='string'?event.model:event.model?.id;
- const result=captureReply({type:'agent-turn-complete','turn-id':event.session_id+':'+event.turn_id,'last-assistant-message':event.last_assistant_message,model},c,'MiniMax');
+ const result=captureReply({type:'agent-turn-complete','turn-id':event.session_id+':'+event.turn_id,'last-assistant-message':event.last_assistant_message,model},c,'MiniMax',{session_id:event.session_id,turn_id:event.turn_id});
  if(result.captured)bindNativeSession(c,event.session_id);return result;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

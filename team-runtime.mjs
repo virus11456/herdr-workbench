@@ -1,4 +1,5 @@
 import {projectMemoryPrompt} from './project-memory.mjs';
+import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
 import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState} from './direct.mjs';
 import fs from 'node:fs';
@@ -159,10 +160,12 @@ export function context(cwd = process.cwd(), terminal = process.env.HC_TERMINAL_
   if (chat && !validChat(chat)) throw new Error('Invalid conversation ID.');
   const root = fs.realpathSync(path.resolve(cwd));
   if(!options)options=process.env.HERDR_WORKBENCH_HOME ? read(path.join(process.env.HERDR_WORKBENCH_HOME,'service.json')) || {} : {};
-  if(options.legacyProjects?.includes(root))options={...options,stateRoot:null};
-  const teamBase=options.stateRoot ? path.join(options.stateRoot,createHash('sha256').update(root).digest('hex').slice(0,32)) : path.join(root,'.herdr-team');
-  const memoryDir=options.appHome?path.join(options.appHome,'project-memory',createHash('sha256').update(root).digest('hex')):teamBase;
-  return {cwd:root,chat,headless:!!options.headless,privateState:!!options.stateRoot,teamBase,teamDir:path.join(teamBase,...(chat?['conversations',chat]:[])),memoryDir,terminal,
+  const projectKey=createHash('sha256').update(root).digest('hex'),conversation=chat?['conversations',chat]:[];
+  const stateBase=options.stateRoot?path.join(options.stateRoot,projectKey.slice(0,32)):null;
+  const teamBase=stateBase&&!options.legacyProjects?.includes(root)?stateBase:path.join(root,'.herdr-team');
+  const memoryDir=options.appHome?path.join(options.appHome,'project-memory',projectKey):teamBase;
+  const usageDir=stateBase&&path.join(stateBase,...conversation);
+  return {cwd:root,chat,headless:!!options.headless,privateState:teamBase===stateBase,teamBase,teamDir:path.join(teamBase,...conversation),memoryDir,usageDir,terminal,
     run:run||((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})))};
 }
 function coreLaunch(c,argv) {
@@ -295,7 +298,8 @@ export function drainChats(c) {
 export function drainProject(c) {
   return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,...drain(x),directQueue:drainDirect(x),collaborationQueue:drainCollaboration(x),chatQueue:drainChats(x)}));
 }
-export function captureReply(event, c, role) {
+const usageProvider={Claude:'claude',Codex:'codex',Antigravity:'antigravity',MiniMax:'minimax'};
+export function captureReply(event, c, role, usageSource) {
   const isClaude = role === 'Claude' && event.hook_event_name === 'Stop';
   const isCodex = ['Codex','Antigravity','MiniMax'].includes(role) && event.type === 'agent-turn-complete';
   if (!isClaude && !isCodex) return {captured: false};
@@ -303,14 +307,24 @@ export function captureReply(event, c, role) {
   let observedModel=event.modelName||event.model;
   if(role==='Codex'&&!observedModel&&directTerminal(c,c.terminal))try{const screen=c.run('hc',['read',c.terminal,'--json','--lines','0']).text||'';observedModel=screen.split('\n').slice(-8).flatMap(line=>{const match=line.match(/^\s*(GPT-[A-Za-z0-9.-]+)\s+(?:low|medium|high|xhigh|max)\s*[·|]/);return match?[match[1]]:[];}).at(-1);}catch{}
   const direct=directReply(c,isClaude?event.last_assistant_message:event['last-assistant-message'],String(event['turn-id']||event.session_id||''),observedModel);
-  if(direct.captured||direct.reason)return direct;
+  if(direct.captured){
+    if(c.usageDir)try{
+      if(directTerminal(c,c.terminal)?.binding.provider===usageProvider[role])saveProviderUsage(c,usageProvider[role],event,usageSource);
+    }catch{}
+    return direct;
+  }
+  if(direct.reason)return direct;
   const control = read(path.join(teamDir(c), 'control.json'));
-  if (control?.terminal && control.terminal !== c.terminal) return captureWorkerReply(event,c,role,control);
+  if (control?.terminal && control.terminal !== c.terminal) return captureWorkerReply(event,c,role,control,usageSource);
   const text = isClaude ? event.last_assistant_message : event['last-assistant-message'];
   if (typeof text !== 'string' || !text.trim()) return {captured:false};
   if(isClaude && control && /^[a-f0-9-]{36}$/.test(event.session_id||'')) save(path.join(teamDir(c),'control.json'),{...control,sessionId:event.session_id});
   if(control?.terminal&&control.terminal===c.terminal){
     const result=legacyCollaborationReply(c,text,role);
+    if(c.usageDir&&control.role===usageProvider[role])try{
+      const t=c.run('hc',['get',c.terminal]);
+      if(t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']!=='true')saveProviderUsage(c,usageProvider[role],event,usageSource);
+    }catch{}
     if(result)return result;
   }
   log(c, role, text, 'reply');
@@ -319,7 +333,7 @@ export function captureReply(event, c, role) {
 function titleMetadata(text) {
  try {const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===1&&typeof value.title==='string';}catch{return false;}
 }
-function captureWorkerReply(event,c,role,control) {
+function captureWorkerReply(event,c,role,control,usageSource) {
  if(!['Codex','Antigravity','MiniMax'].includes(role)||event.type!=='agent-turn-complete'||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
  const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{},binding=bindings[c.terminal];
  if(!binding||binding.owner!==control.terminal||binding.chat!==(c.chat||'legacy'))return{captured:false,reason:'unregistered_worker'};
@@ -329,6 +343,7 @@ function captureWorkerReply(event,c,role,control) {
  if(titleMetadata(text))return{captured:false,reason:'session_title_metadata'};
  const hash=createHash('sha256').update(String(event['turn-id']??worker.turn??'')+'\n'+text).digest('hex');
  if(binding.captureHash===hash)return{captured:false,reason:'duplicate'};
+ if(worker.cwd===c.cwd&&['codex','antigravity','mcode','minimax'].includes(worker.status?.app))saveProviderUsage(c,usageProvider[role],event,usageSource);
  let explicit=false;
  try{explicit=fs.readFileSync(path.join(teamDir(c),'messages.jsonl'),'utf8').trim().split('\n').slice(-200).some(line=>{const e=JSON.parse(line);return e.terminal===c.terminal&&e.kind==='worker-report'&&!['codex-notify','antigravity-stop','minimax-stop'].includes(e.via)&&!titleMetadata(e.text)&&Date.parse(e.time)>=binding.sentAt;});}catch{}
  if(explicit){binding.captureHash=hash;save(file,bindings);return{captured:false,reason:'explicit_report_already_sent'};}

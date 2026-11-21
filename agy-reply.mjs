@@ -1,5 +1,6 @@
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {pathToFileURL,fileURLToPath} from 'node:url';
 import {context,captureReply} from './team-runtime.mjs';import {directTerminal} from './direct.mjs';
+import {antigravityTurnUsage} from './provider-usage.mjs';
 export function agyReply(event,c,brainRoot=path.join(os.homedir(),'.gemini/antigravity-cli/brain')){
  if(!c.terminal||event.fullyIdle!==true||!['model_stop','NO_TOOL_CALL'].includes(event.terminationReason)||event.error)return{captured:false,reason:'not_successfully_idle'};
  if(!/^[a-f0-9-]{36}$/.test(event.conversationId||''))return{captured:false,reason:'invalid_conversation'};
@@ -18,7 +19,7 @@ export function agyReply(event,c,brainRoot=path.join(os.homedir(),'.gemini/antig
  const lines=fs.readFileSync(expected,'utf8').trim().split('\n').map(line=>JSON.parse(line));
  const lastUser=lines.findLastIndex(line=>line.type==='USER_INPUT'),last=lines.findLast(line=>line.source==='MODEL'&&line.type==='PLANNER_RESPONSE');
  if(!last||lines.indexOf(last)<=lastUser||last.status!=='DONE'||typeof last.content!=='string'||!last.content.trim()||last.tool_calls?.length)return{captured:false,reason:'no_final_response'};
- return captureReply({type:'agent-turn-complete','turn-id':event.conversationId+':'+event.executionNum,'last-assistant-message':last.content,modelName:event.modelName},c,'Antigravity');
+ return captureReply({type:'agent-turn-complete','turn-id':event.conversationId+':'+event.executionNum,'last-assistant-message':last.content,modelName:event.modelName},c,'Antigravity',antigravityTurnUsage(event,lines,lastUser,last));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  try{const event=JSON.parse(fs.readFileSync(0,'utf8')),home=path.dirname(fileURLToPath(import.meta.url)),diagnostic={time:new Date().toISOString(),hasTerminal:!!process.env.HC_TERMINAL_ID,hasHome:!!process.env.HERDR_WORKBENCH_HOME,keys:Object.keys(event),fullyIdle:event.fullyIdle,terminationReason:event.terminationReason};

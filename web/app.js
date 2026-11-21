@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-drive32';
+const UI_BUILD='20261121-usage33';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -236,6 +236,7 @@ function renderTasks(){
  }
 }
 function render(){
+ if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
  $('workbench-version').textContent=state.appVersion?'版本 '+state.appVersion:'版本待確認';
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
@@ -417,13 +418,29 @@ $('remove-project-category').onclick=()=>{
  if(category&&confirm('刪除「'+category+'」分類？此分類的所有專案都會移至未分類。'))changeCategory('remove',category);
 };
 let memoryRevision=0;
+const usageNumber=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:2});
+let usageSnapshot='';
 function renderUsage(){
- const list=$('conversation-usage');list.replaceChildren();
+ const list=$('conversation-usage'),snapshot=JSON.stringify(state?.usage||[]);
+ if(snapshot===usageSnapshot)return;
+ usageSnapshot=snapshot;list.replaceChildren();
  if(!state?.usage?.length){
   list.append(el('dt','','這段對話還沒有可統計的送達紀錄。'));return;
  }
- for(const {provider,delivered,replies} of state.usage){
+ for(const {provider,delivered,replies,measuredTurns,tokens,quota} of state.usage){
   list.append(el('dt','',providers[provider]||'未標記引擎'),el('dd','',delivered+' 次送達 · '+replies+' 次回覆'));
+  if(tokens){
+   const inputLabel=provider==='codex'?'輸入（含快取）':'輸入';
+   const labels={input:inputLabel,output:'輸出',cacheRead:'讀取快取',cacheWrite:'寫入快取'};
+   const fields=Object.entries(labels).flatMap(([key,label])=>typeof tokens[key]==='number'?[label+' '+usageNumber.format(tokens[key])]:[]);
+   list.append(el('dd','usage-tokens',measuredTurns+' 個已記錄回合 · '+fields.join(' · ')+' tokens'));
+  }
+  if(quota){
+   const formatDate=seconds=>new Date(seconds*1000).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+   const label=minutes=>minutes%1440===0?minutes/1440+' 天':minutes%60===0?minutes/60+' 小時':minutes+' 分鐘';
+   const period=quota.windows.map(w=>label(w.windowMinutes)+' 已用 '+usageNumber.format(w.usedPercent)+'%，'+formatDate(w.resetsAt)+' 重設');
+   list.append(el('dd','usage-quota','帳號額度 · '+period.join(' · ')+' · 回報於 '+formatDate(Date.parse(quota.observedAt)/1000)));
+  }
  }
 }
 $('conversation-usage-section').addEventListener('toggle',event=>{if(event.currentTarget.open)renderUsage();});

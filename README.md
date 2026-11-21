@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.3-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.3-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.3-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.4-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.4-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.4-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -155,7 +155,11 @@ npm test
 
 「設定 → 專案記憶」保存專案目標、偏好和決策。後續派工會讀取當下保存的內容，並可隨時編輯、清空。
 
-「設定 → 本對話使用統計」依引擎列出最近 300 筆事件的已送達訊息與可配對的回覆。早期未記錄引擎的事件列為「未標記引擎」。模型 token 與費用請看各引擎帳戶頁面。
+「設定 → 用量與額度」顯示更新後同一對話中已記錄回合的 token。Claude、Codex、MiniMax 與 Google Antigravity 的數字來自 CLI 的結構化紀錄。輸出直接使用引擎回報的值，Codex 輸入已包含快取，不重複加總。送達與回覆另外以最近 300 筆事件計算。
+
+Codex 帳號額度依本對話最近收到的 CLI 快照顯示已用比例、週期、重設及回報時間。重設後等待 CLI 回報新資料。四個 CLI 的現有來源沒有可對應回合的實付費用，金額欄位不顯示。工作台只在本機私有狀態保存數字、時間及去重摘要。
+
+參考資料：[Claude Code hooks](https://code.claude.com/docs/en/hooks) · [Codex CLI 原始碼](https://github.com/openai/codex) · [MiniMax Code SDK 用量](https://github.com/MiniMax-AI/minimax-code/blob/main/packages/code-sdk/README.md) · [Antigravity CLI hooks](https://antigravity.google/docs/hooks)
 
 「設定 → 維護工作」可填入問題，準備請代理在獨立 worktree 修正及測試的草稿。代理回報變更和測試後，由使用者另外核准合併、部署或發布。
 
