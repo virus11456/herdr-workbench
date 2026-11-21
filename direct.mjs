@@ -1,4 +1,4 @@
-import {projectMemoryPrompt} from './project-memory.mjs';
+import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
 import {roster,saveRoster,validateRoster,coordinatorProfile,canCreateAgent,canProvisionForMessage,log} from './team-runtime.mjs';
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -307,7 +307,7 @@ function sendDirect(c){
   const role=canCreateAgent(c,agent.id)
    ?'你是本專案的領頭羊。收到目標後先拆解並判斷分工，使用者文字指定人選時照指派實際送出，未指定時依任務挑選名冊成員。交付目標本身允許你在既有專案成員間完成所需分工。簡單問題與狀態查詢可直接答覆。'
    :'這是使用者直接交給你的任務，你應親自執行，依使用者指示才找同專案其他成員協作。';
-  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
+  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
   bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
   if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
 

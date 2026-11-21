@@ -1,4 +1,4 @@
-import {projectMemoryPrompt} from './project-memory.mjs';
+import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
 import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState} from './direct.mjs';
@@ -290,7 +290,7 @@ export function drainChats(c) {
       save(leaseFile,{terminal:control.terminal,time:Date.now(),messageId:msg.id,chat:c.chat});
       const creation=routed.target==='team'&&canProvisionForMessage(c,null,msg.allowAgentCreation)?msg.id:null;
       save(path.join(teamDir(c),'legacy-message.json'),{id:msg.id,terminal:control.terminal,creation});
-      c.run('hc',['send',control.terminal,teamBrief(c)+'\n'+agentCreationPrompt(creation)+'\n\n'+routed.text]);
+      c.run('hc',['send',control.terminal,teamBrief(c)+conversationHistoryPrompt(c,'__coordinator__',routed.text)+'\n'+agentCreationPrompt(creation)+'\n\n'+routed.text]);
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));
       log(c,'系統','訊息已送到總控。','delivery',{messageId:msg.id,delivery:'sent',provider:t.status.app==='codex'?'codex':'claude'});
       return{sent:1,pending:files.length-1};
