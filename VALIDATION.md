@@ -98,6 +98,12 @@
 
 正式 PWA 另在 Chrome 375、820、812 橫向與 1280 px 下驗證附件入口和狀態更新。同一對話內容未變時，狀態回應從 55,273 位元組降至 9,403 位元組。此項量測的範圍是單一對話的傳輸量。
 
+## 0.8.10-dev · v41 對話導覽
+
+- 84 項自動測試通過。瀏覽器另驗證各代理開啟最近對話、新主題維持目前收件代理、舊連結與上一頁／下一頁可回原主題，以及切換前的文字與附件草稿能接續。
+- 在正式 PWA 以 Chrome 的桌面、平板、手機直向和橫向尺寸確認最近期對話會開啟，且「新對話」觸控區至少為 44 × 44 CSS px。
+- iPhone 附件上傳與真實領頭羊派工的實機驗收另行記錄，以上瀏覽器結果僅涵蓋介面與導覽。
+
 ## 雲端新機安裝
 
 GitHub Actions 使用一台全新 macOS 15.8.2（Apple Silicon）虛擬機。從公開 ZIP 下載並比對 SHA-256，解壓後執行 `Install.command --dry-run`，確認預覽未寫入，再以 `node setup.mjs` 完成安裝。安裝的官方 CLI 均可執行，Web 與佇列 LaunchAgent 已載入，Core 找到四個範本。測試確認網頁只監聽 loopback，身分和來源驗證生效，且可建立帶預設領頭羊的空白專案。模型登入、任務推論、實體裝置重開機、Google Drive 與實際 Tailscale 連線均未包含在這次雲端測試。[GitHub Actions 完整紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/44891610479)

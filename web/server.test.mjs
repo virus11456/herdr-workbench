@@ -3,6 +3,40 @@ import {saveRoster,context} from '../team-runtime.mjs';
 import {createECDH,randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from './server.mjs';
 
+test('opening an agent finds its newest active chat while explicit history links stay pinned',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-recent-unit-'));
+ const app=path.join(dir,'app'),project=path.join(dir,'project');
+ fs.mkdirSync(app);fs.mkdirSync(project);
+ const chats=[{id:'oldest',title:'Oldest'},{id:'middle',title:'Middle'},{id:'empty',title:'Empty'}];
+ fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[
+  {folder:project,name:'Fixture',agentWorkspace:true,chats}
+ ]}));
+ saveRoster(context(project,null),[
+  {id:'starter',name:'領頭羊',provider:'claude',level:'worker'},
+  {id:'engineer',name:'工程師',provider:'codex',level:'worker'}
+ ]);
+ const record=(chat,rows)=>{
+  const scope=context(project,null,null,chat);
+  fs.mkdirSync(scope.teamDir,{recursive:true});
+  fs.writeFileSync(path.join(scope.teamDir,'messages.jsonl'),rows.map(e=>JSON.stringify(e)).join('\n')+'\n');
+ };
+ const event=(target,at,kind='reply')=>({kind,time:'2026-11-21T'+at+'Z',direct:true,target,text:'fixture'});
+ record('oldest',[event('engineer','12:00:00'),event('starter','13:10:00')]);
+ record('middle',[event('starter','13:00:00'),event('engineer','14:00:00')]);
+ const server=createServer({allowedLogin:'owner@example.test',origin:'https://example.test',appHome:app,
+  core:()=>{throw Error('No agents should start');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port+'/api/state?';
+ const state=async query=>await(await fetch(base+query,{headers:{'Tailscale-User-Login':'owner@example.test'}})).json();
+ assert.equal((await state('latest=1')).chat,'oldest');
+ assert.equal((await state('latest=1&agent=engineer')).chat,'middle');
+ assert.equal((await state('latest=1&chat=empty')).chat,'empty');
+ record('middle',[event('starter','15:00:00','user')]);
+ assert.equal((await state('latest=1')).chat,'middle');
+ assert.equal((await state('chat=oldest')).chat,'oldest');
+});
+
 test('attachment upload stays inside the selected conversation and unchanged refreshes omit history',async t=>{
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-attachment-test-')));
  const home=path.join(root,'app'),folder=path.join(root,'project');
