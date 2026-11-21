@@ -77,6 +77,17 @@
 
 官方 hook 的版本差異依實際事件修正：Antigravity 的完成原因與 transcript_full.jsonl 路徑、hook 工作目錄不同，以及 MiniMax 原生 hook 不繼承 Herdr 環境變數。MiniMax 只在能唯一對應真實已登記會話時接收，模糊比對會拒絕。
 
+## Claude Opus 派工給新建的 Codex 代理
+
+2026-11-21 在 Claude 每週額度重設後，使用 Herdr 0.8.9-dev、已信任的隔離資料夾和真實 Core 終端測試。從 Opus 的對話只授權該則訊息。驗收通過的順序如下。
+
+1. Claude Opus 5.5 建立「算術核對羊」，選擇 Codex，並保存長期職責。
+2. 工作台把算術任務實際交付給新的 Codex 代理，已核對送達紀錄。
+3. Codex 回報「18 + 24 = 42」。結果回到最初派工的 Opus 代理，兩方對話均顯示各自的回覆。
+4. Opus 核對後完成驗收。工作台保存真實終端讀取證據，任務狀態為 `done`。一般代理的新增授權請求在入列前被拒絕。
+
+過程沒有額外登入、信任、權限或付費提示。驗收後移除兩個專用終端。
+
 ## 雲端新機安裝
 
 GitHub Actions 使用一台全新 macOS 15.8.2（Apple Silicon）虛擬機。從公開 ZIP 下載並比對 SHA-256，解壓後執行 `Install.command --dry-run`，確認預覽未寫入，再以 `node setup.mjs` 完成安裝。安裝的官方 CLI 均可執行，Web 與佇列 LaunchAgent 已載入，Core 找到四個範本。測試確認網頁只監聽 loopback，身分和來源驗證生效，且可建立帶預設領頭羊的空白專案。模型登入、任務推論、實體裝置重開機、Google Drive 與實際 Tailscale 連線均未包含在這次雲端測試。[GitHub Actions 完整紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/44891610479)
