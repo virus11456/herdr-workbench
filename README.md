@@ -60,7 +60,7 @@ node setup.mjs --origin https://your-host.your-tailnet.ts.net --login owner@exam
 
 安裝範圍也包含官方回覆 hook：Claude 的工作台專用設定、Codex 的單次會話 notify，以及 Google `~/.gemini/config/hooks.json`、MiniMax `~/.minimax/hooks.json`。既有內容先備份、保留其他 hook；不替使用者開啟原本停用的 MiniMax 全域 hooks。這些介面只接收已登記的真實代理回覆與限定的專案協作動作，不修改工具權限、信任或沙箱。
 
-0.8.9-dev 已在全新 macOS 15（Apple Silicon）雲端虛擬機使用公開 ZIP 實際安裝。驗收包含官方 CLI、兩個使用者 LaunchAgent、四個 Core 範本與本機工作台；登入、Drive、Tailscale 跨裝置連線和重開機仍需實機驗證。[雲端安裝驗收](https://github.com/virus11456/herdr-workbench/actions/runs/44891610479)
+0.8.10-dev v42-memory 已在全新 macOS 15.8.2（Apple Silicon）雲端虛擬機使用公開 ZIP 實際安裝。驗收包含官方 CLI、兩個使用者 LaunchAgent、四個 Core 範本、本機工作台、歷史記憶模組與 86 項測試；登入、Drive、Tailscale 跨裝置連線和重開機仍需實機驗證。[雲端安裝驗收](https://github.com/virus11456/herdr-workbench/actions/runs/44932391371)
 
 安裝目錄為 `~/.config/herdr-workbench/`，Web 預設埠 `48724`。兩個使用者 LaunchAgent 是 `dev.herdr.workbench-web` 與 `dev.herdr.workbench-queue`。登入 macOS 後自動執行；主機仍需開機且保持登入，不會自動更改睡眠設定或取得管理員權限。
 

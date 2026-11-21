@@ -124,6 +124,12 @@
 
 2026-11-22 在正式 PWA 的隔離專案交付唯讀等待任務給 Codex，從任務卡取消第二筆尚未送達的排隊訊息，再停止第一筆已送達且正在執行的回合。主機核對取消與停止狀態後，再從同一位代理的聊天送出 7+8，取得真實回覆 15。此輪實際操作補驗了原先只由隔離 Core 模擬涵蓋的取消及停止路徑。
 
+### 最新安裝包的乾淨 macOS 安裝
+
+2026-11-22 使用公開的 0.8.10-dev-v42-memory ZIP，在全新 macOS 15.8.2 arm64 雲端機完成安裝。SHA-256、官方 CLI、兩個 LaunchAgent、四個範本、loopback 工作台、身份與 Origin 檢查、預設領頭羊專案及已安裝歷史模組均通過，另在解壓目錄執行 86 項測試全數通過。[成功執行紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/44932391371)
+
+第一輪額外原始碼回歸步驟漏裝解壓目錄的 npm 依賴。補齊該驗收步驟後，重新在全新雲端機跑完整流程通過。這輪使用測試身份、未登入模型帳號，實體 Mac 的本人登入、Drive、實際 tailnet 與重開機仍列待驗。
+
 ## 雲端新機安裝
 
 GitHub Actions 使用一台全新 macOS 15.8.2（Apple Silicon）虛擬機。從公開 ZIP 下載並比對 SHA-256，解壓後執行 `Install.command --dry-run`，確認預覽未寫入，再以 `node setup.mjs` 完成安裝。安裝的官方 CLI 均可執行，Web 與佇列 LaunchAgent 已載入，Core 找到四個範本。測試確認網頁只監聽 loopback，身分和來源驗證生效，且可建立帶預設領頭羊的空白專案。模型登入、任務推論、實體裝置重開機、Google Drive 與實際 Tailscale 連線均未包含在這次雲端測試。[GitHub Actions 完整紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/44891610479)
@@ -135,7 +141,7 @@ GitHub Actions 使用一台全新 macOS 15.8.2（Apple Silicon）虛擬機。從
 ## 尚需本人操作或其他裝置驗證
 
 - 更多 iPhone／iPad 機型、不同瀏覽器、最大輔助文字級別，以及長時間使用；本次實機操作回報不代表全裝置覆蓋。
-- 新的 macOS 15.8.2（Apple Silicon）雲端機已驗證 0.8.9-dev 安裝。全新實體 Mac 的本人登入、Drive、Tailscale 跨裝置與重開機仍待驗收。
+- 新的 macOS 15.8.2（Apple Silicon）雲端機已驗證 0.8.10-dev v42-memory 安裝和 86 項測試。全新實體 Mac 的本人登入、Drive、Tailscale 跨裝置與重開機仍待驗收。
 - 第二次同機重開機的登入後自動恢復已通過；登入前服務、其他網路、不同 macOS 或其他主機仍未驗證。
 - 舊原生 Herdr 與背景 PWA 不是即時雙向鏡像；日常跨裝置使用同一 PWA 對話連結。
 
