@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.10-dev · v41**（介面版本 `20261121-recent41`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.10-dev-v41.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.10-dev-v41.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.10-dev · v42**（介面版本 `20261122-agent42`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.10-dev-v42.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.10-dev-v42.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -94,8 +94,8 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 
 1. 建立專案，先有一隻不能刪除的「領頭羊」；保存設定不會啟動代理。
 2. 左側「加入新代理」選名稱、引擎與職責；同一引擎可以有多位。
-3. 點某隻羊，直接回到它最近有訊息的對話。要另開主題，點聊天右上角的「新對話」；傳送首則訊息後，側欄以該則訊息顯示主題，可點回原對話。也可用 `@代理名稱` 指定收件人。
-4. 要分工時，把目標或指定人選寫進訊息。送出後可從對話上方的「任務」追蹤交付、回報及驗收。
+3. 每個專案的每位代理各有一條時間線。點某隻羊，舊訊息和最新回報依日期排在同一頁。也可用 `@代理名稱` 指定收件人。
+4. 要分工時，把目標或指定人選寫進訊息。從左下「設定 → 任務進度」追蹤交付、回報及驗收，或從舊訊息點「查看原任務」。
 5. 點代理右側「⋯」管理 Pin、設定、重新命名、轉移專案或刪除；「設定」內可選 Claude 的 Opus／Fable，或按「任命為協調者（Opus）」。協調者預設 Claude Opus 5.5；切換執行中模型必須等 CLI 真正確認。
 6. 從側欄專案名稱右側的編輯按鈕改名，原資料夾、專案 ID、檔案與對話都會保留。起手建議只會填入草稿。
 

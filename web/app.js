@@ -4,7 +4,8 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-recent41';
+const UI_BUILD='20261122-agent42';
+const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -31,6 +32,7 @@ const initialQuery=new URLSearchParams(location.search);
 let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,editing=null,posting=false,navigating=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',attentionSnapshot='';
+let olderMessages=[],historyBefore=null,historyLoading=false;
 function hydrateSheep(wrap){
  if(!sheepSource)return;
  const svg=sheepSource.cloneNode(true);svg.classList.add('sheep-character');svg.setAttribute('aria-hidden','true');wrap.replaceChildren(svg);
@@ -80,7 +82,7 @@ function renderReplyProgress(){
  box.dataset.phase=progress.phase;const sheep=avatar(agent?.provider||'claude');animateSheep(sheep,progress.phase==='working'?'working':progress.phase==='sending'||progress.phase==='queued'?'starting':'');box.append(sheep,el('span','',progress.text));
  if(progress.animate){const dots=el('span','reply-dots');dots.setAttribute('aria-hidden','true');for(let i=0;i<3;i++)dots.append(el('i'));box.append(dots);}
 }
-const draftKey=()=>`herdr-draft:${selection.project}:${selection.chat}:${selectedAgent||'team'}`;
+const draftKey=(chat=selection.chat)=>`herdr-draft:${selection.project}:${chat}:${selectedAgent||'team'}`;
 const attachmentsByDraft=new Map();
 const currentAttachments=()=>attachmentsByDraft.get(draftKey())||[];
 const fileSizeLimit=15*1024*1024;
@@ -138,11 +140,25 @@ function restoreDraft(){
  catch{$('draft').value='';}
  updateSend();
 }
+function renderOtherDrafts(){
+ const list=$('other-drafts-list');list.replaceChildren();
+ for(const chat of activeProject()?.chats||[]){
+  if(chat.id===selection.chat)continue;
+  const key=draftKey(chat.id);
+  let draft;
+  try{draft=localStorage.getItem(key)?.trim();}catch{}
+  const count=attachmentsByDraft.get(key)?.length||0;
+  if(!draft&&!count)continue;
+  const button=el('button','',draft?Array.from(draft.split('\n',1)[0]).slice(0,45).join(''):`${count} 個附件`);
+  button.type='button';button.onclick=()=>{$('team-dialog').close();switchChat(selection.project,chat.id,selectedAgent);};
+  list.append(button);
+ }
+ $('other-drafts').hidden=!list.childElementCount;
+}
 function updateSend(){
  const unavailable=posting||navigating||!state?.project||state?.projectAvailable===false;
  $('send').disabled=unavailable||(!$('draft').value.trim()&&!currentAttachments().length);
  $('add-attachment').disabled=unavailable;
- $('new-chat').disabled=unavailable;
  $('draft').readOnly=posting||navigating;
  renderAttachments();
  fitDraft();
@@ -154,17 +170,28 @@ async function api(route,data,scope=selection){
 }
 async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
  const switching=scope!==selection,n=++revision,q=new URLSearchParams();
+ q.set('timeline','1');
+ if(agent)q.set('agent',agent);
  if(scope.project)q.set('project',scope.project);
  if(scope.chat)q.set('chat',scope.chat);
- else{q.set('latest','1');if(agent)q.set('agent',agent);}
+ else q.set('latest','1');
  const previous=state;
  if(previous?.project===scope.project&&previous.chat===scope.chat&&previous.messagesRevision&&Array.isArray(previous.messages)){
   q.set('messagesRevision',previous.messagesRevision);
+  if(!switching&&previous.timeline?.agent===(agent||legacyAgent))q.set('timelineRevision',previous.timeline.revision);
  }
  try{
   const result=await api('state?'+q);if(n!==revision)return;
   if(previous&&!Object.hasOwn(result,'messages')&&result.project===previous.project&&result.chat===previous.chat&&result.messagesRevision===previous.messagesRevision){
    result.messages=previous.messages;
+  }
+  const sameTimeline=previous?.project===result.project&&previous.timeline?.agent===result.timeline?.agent;
+  if(sameTimeline&&result.timeline&&!Object.hasOwn(result.timeline,'messages')&&result.timeline.revision===previous.timeline.revision){
+   result.timeline=previous.timeline;
+  }
+  if(!sameTimeline){olderMessages=[];historyBefore=null;}
+  else if(olderMessages.length&&result.timeline?.messages!==previous.timeline?.messages){
+   olderMessages=mergeTimeline(olderMessages,previous.timeline?.messages||[],result.timeline?.messages||[]);
   }
   const first=!state||switching;
   if(switching){selectedAgent=agent;details=false;notice('');}
@@ -182,7 +209,7 @@ async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
   return true;
  }catch(e){if(n===revision){notice(e.message);$('status').textContent='主機離線，請檢查 Tailscale';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
 }
-function switchAgent(id,focusDraft=true){persistDraft();selectedAgent=id;const link=new URL(location.href);if(id)link.searchParams.set('agent',id);else link.searchParams.delete('agent');history.replaceState(null,'',link);restoreDraft();render();document.body.classList.remove('show-sidebar');if(focusDraft)$('draft').focus();}
+function switchAgent(id,focusDraft=true){persistDraft();selectedAgent=id;const link=new URL(location.href);if(id)link.searchParams.set('agent',id);else link.searchParams.delete('agent');history.replaceState(null,'',link);restoreDraft();render();document.body.classList.remove('show-sidebar');refresh();if(focusDraft)$('draft').focus();}
 async function switchChat(project,chat=null,agent=null,recordHistory=true){
  if(posting||navigating||!project)return;
  const previous=selection;
@@ -196,6 +223,25 @@ async function switchChat(project,chat=null,agent=null,recordHistory=true){
   }
  }finally{navigating=false;updateSend();scheduleRefresh();}
 }
+function mergeTimeline(...pages){
+ const byId=new Map(pages.flat().map(message=>[message.timelineId,message]));
+ return [...byId.values()].sort((a,b)=>a.timelineAt-b.timelineAt||a.timelineOrder-b.timelineOrder||a.timelineIndex-b.timelineIndex);
+}
+$('earlier-messages').onclick=async()=>{
+ const timeline=state?.timeline,agent=selectedAgent||legacyAgent,before=olderMessages.length?historyBefore:timeline?.before;
+ if(historyLoading||navigating||!before||timeline?.agent!==agent)return;
+ const scope={...selection},button=$('earlier-messages');
+ historyLoading=button.disabled=true;
+ try{
+  const page=await api('history?'+new URLSearchParams({...scope,agent,before}));
+  if(scope.project!==selection.project||page.agent!==(selectedAgent||legacyAgent))return;
+  const feed=$('feed'),height=feed.scrollHeight,top=feed.scrollTop;
+  olderMessages=mergeTimeline(page.messages,olderMessages,state.timeline.messages);
+  historyBefore=page.before;
+  render();feed.scrollTop=top+feed.scrollHeight-height;
+ }catch(error){notice(error.message);}
+ finally{historyLoading=button.disabled=false;}
+};
 window.addEventListener('popstate',()=>{
  const params=new URLSearchParams(location.search);
  switchChat(params.get('project')||selection.project,params.get('chat'),params.get('agent'),false);
@@ -218,22 +264,6 @@ function openAgentMenu(id,button){closeAgentMenu(false);const a=id==='__coordina
  menu.hidden=false;button.setAttribute('aria-expanded','true');const r=button.getBoundingClientRect(),w=216;menu.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';menu.style.top=Math.max(8,Math.min(r.bottom+5,innerHeight-menu.offsetHeight-8))+'px';menu.querySelector('button').focus();
 }
 function openAgentAction(id,action,targetProject){const a=state.agents.find(a=>a.id===id);if(!a)return;const form=$('agent-action-form');form.dataset.agent=id;form.dataset.action=action;$('agent-action-title').textContent=action==='move'?'轉移 '+a.name:'刪除 '+a.name;$('agent-action-copy').textContent=action==='move'?'將引擎、模型與職責設定移至目的專案。原對話與檔案保留，目標專案使用自己的會話；不會複製登入資料。':'移除這個專案中的角色設定，停止已核對的閒置會話；原對話與專案檔案保留。';$('move-target-label').hidden=action!=='move';$('move-target').required=action==='move';$('move-target').disabled=action!=='move';$('move-target').replaceChildren();for(const p of state.projects.filter(p=>p.id!==state.project&&p.available!==false)){const o=el('option','',p.name);o.value=p.id;$('move-target').append(o);}if(targetProject)$('move-target').value=targetProject;$('agent-action-submit').textContent=action==='move'?'移至專案':'刪除代理';$('agent-action-error').textContent='';$('agent-action-dialog').showModal();}
-function appendTopics(group,project,id){
- const topics=project.chats.filter(chat=>chat.topics?.[id]||chat.topicFor===id||chat.id===selection.chat);
- if(topics.length<2)return;
- topics.sort((a,b)=>(b.topics?.[id]?.time||b.createdAt||0)-(a.topics?.[id]?.time||a.createdAt||0));
- const list=el('div','agent-topics');
- list.setAttribute('role','group');list.setAttribute('aria-label','這位代理的對話');
- for(const chat of topics){
-  const title=chat.topics?.[id]?.title||chat.title||'新對話';
-  const button=el('button','agent-topic',title);
-  button.type='button';button.title=title;button.dataset.chat=chat.id;
-  if(chat.id===selection.chat)button.setAttribute('aria-current','true');
-  button.onclick=()=>switchChat(project.id,chat.id,id==='__coordinator__'?null:id);
-  list.append(button);
- }
- group.append(list);
-}
 function renderNav(){
  if(menuContext)return;
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control,state?.coordinatorPreferredModel,state?.pendingAgents,state?.sidebar]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;closeAgentMenu(false);
@@ -261,7 +291,6 @@ function renderNav(){
    const connected=agentConnected(t),dot=el('span','live-dot'+(connected?' is-connected':'')+(connected&&activity?' is-busy':''));dot.setAttribute('aria-hidden','true');dot.title=connected?'已連線':'未連線';b.append(dot);b.onclick=()=>switchChat(project.id,null,lead?null:id);b.onkeydown=e=>{if(e.altKey&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();stepAgent(id,e.key==='ArrowUp'?-1:1);}};row.append(b);
    const more=el('button','member-more','⋯');more.type='button';more.setAttribute('aria-label',name+'的操作選單');more.setAttribute('aria-haspopup','menu');more.setAttribute('aria-expanded','false');more.onclick=()=>menuContext?.id===id?closeAgentMenu():openAgentMenu(id,more);row.append(more);
    row.ondragstart=e=>{if(e.target.closest('.member-more')){e.preventDefault();return;}dragAgent=id;row.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-herdr-agent',id);closeAgentMenu(false);};row.ondragend=()=>{dragAgent=null;row.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(n=>n.classList.remove('drag-over'));};row.ondragover=e=>{if(dragAgent&&dragAgent!==id){e.preventDefault();row.classList.add('drag-over');row.dataset.drop=e.clientY>row.getBoundingClientRect().top+row.offsetHeight/2?'after':'before';}};row.ondragleave=()=>row.classList.remove('drag-over');row.ondrop=e=>{e.preventDefault();row.classList.remove('drag-over');if(dragAgent&&dragAgent!==id)reorderAgent(dragAgent,id,row.dataset.drop==='after');};group.append(row);
-   if(active)appendTopics(group,project,id);
   }
  }
  if(group.childElementCount){group.prepend(el('h2','project-category-title',category));nav.append(group);}
@@ -331,19 +360,20 @@ async function openArtifact(task,artifact){
 }
 $('artifact-close').onclick=()=>$('artifact-dialog').close();
 $('artifact-dialog').addEventListener('close',()=>{artifactRequest++;$('artifact-image').removeAttribute('src');});
-$('task-jump').onclick=()=>{
+function openTasks(id){
  const panel=$('task-checklist');
+ if(panel.hidden)return;
  panel.open=true;
- $('task-summary').focus({preventScroll:true});
- panel.scrollIntoView({block:'start'});
-};
+ const card=id&&[...$('task-items').children].find(node=>node.dataset.id===id);
+ if(card)card.open=true;
+ (card?.querySelector('summary')||$('task-summary')).focus({preventScroll:true});
+ (card||panel).scrollIntoView({block:'start'});
+}
+$('show-tasks').onclick=()=>{$('team-dialog').close();openTasks();};
 function renderTasks(){
  const tasks=taskCards(state,selectedAgent),totals=taskSummary(tasks),key=JSON.stringify([selection,selectedAgent,tasks]);
  $('task-checklist').hidden=!tasks.length;
- $('task-jump').hidden=$('task-checklist').hidden;
- const pending=totals.attention+totals.review;
- $('task-jump').textContent=pending?'任務 · '+pending:'任務';
- $('task-jump').setAttribute('aria-label',pending?`查看任務，${pending} 項待處理或待驗收`:'查看任務');
+ $('show-tasks').hidden=$('task-checklist').hidden;
  const segments=[[totals.attention,'待處理'],[totals.review,'待驗收'],[totals.active,'執行或排隊'],[totals.verified,'已驗收'],[totals.replied,'已回覆'],[totals.unconfirmed,'回覆未核對']];
  $('task-summary').textContent=['任務進度',...segments.filter(([n])=>n).map(([n,label])=>n+' '+label)].join(' · ');
  if(key===checklistSnapshot)return;checklistSnapshot=key;const open=new Set([...$('task-items').querySelectorAll('details[open]')].map(n=>n.dataset.id));$('task-items').replaceChildren();
@@ -378,7 +408,7 @@ function renderTasks(){
 }
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?'版本 '+state.appVersion:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v42`:'版本待確認';
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -394,24 +424,42 @@ function render(){
  $('counts').textContent=`${state.agents.length+(state.agentWorkspace?0:1)} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
  renderAttention();renderTasks();
  const all=state.messages||[],deliveries={};for(const e of all)if(e.kind==='delivery')deliveries[e.messageId]=e.delivery;
- const messages=all.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment')&&(details||!agent||m.role===agent.name||m.agentId===agent.id||m.target===agent.id||(live&&m.terminal===live.address)));
+ const timeline=state.timeline?.agent===(selectedAgent||legacyAgent)?state.timeline:null;
+ const visible=timeline?mergeTimeline(olderMessages,timeline.messages):all.filter(m=>agent?m.direct&&(m.target||m.agentId)===agent.id:!m.direct);
+ const messages=visible.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment'));
+ $('earlier-messages').hidden=!(olderMessages.length?historyBefore:timeline?.before);
  $('welcome').hidden=messages.length>0;
  $('welcome-description').textContent=agent?agent.brief:'先和協調總控聊聊目標，其他夥伴需要時再加入。';
  const welcomeHeading=$('welcome').querySelector('h2');welcomeHeading.replaceChildren();welcomeHeading.textContent=agent?`交給${agent.name}的下一件事`:'今天，想和羊群完成什麼？';
- const stamp=JSON.stringify([selection,selectedAgent,details,state.coordinatorName,state.agents.map(a=>[a.id,a.name]),state.messagesRevision??messages,state.taskControls]);
+ const stamp=JSON.stringify([selection,selectedAgent,details,state.coordinatorName,state.agents.map(a=>[a.id,a.name]),timeline?.revision||state.messagesRevision,olderMessages[0]?.timelineId,state.taskControls]);
  const container=$('messages'),wasBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<100;
  if(stamp!==messageSnapshot){messageSnapshot=stamp;container.replaceChildren();
  if(details){container.append(el('div','details-note','這個專案自行設定成員與職責，沒有固定部門或工作順序。每位代理都能直接對話，並在你授權後交付協作與驗收。角色設定不代表已啟動，queued 只代表排入等待。'));}
+ let day;
  for(const m of messages){
+  if(m.time&&Number.isFinite(Date.parse(m.time))){
+   const date=new Date(m.time).toLocaleDateString('zh-TW');
+   if(date!==day){container.append(el('p','conversation-date',date));day=date;}
+  }
   const user=m.role==='你',row=el('article','message'+(user?' user':''));
   if(!user){const a=state.agents.find(a=>a.name===m.role||a.id===m.agentId);row.append(avatar(a?.provider||'claude'));}
   const bubble=el('div','message-bubble'),role=el('div','message-role',m.terminal===state.control?.terminal&&['Claude','Codex','總控'].includes(m.role)?state.coordinatorName||m.role:m.role||'總控');
-  if(user&&m.messageId){
-   const control=state.taskControls?.[m.messageId];
-   const label=control==='cancelled'?'已取消':control==='stopped'?'已停止':(deliveries[m.messageId]||m.delivery)!=='sent'?(m.direct?'等待代理接收':'等待總控處理'):null;
+  const archive=m.sourceChat&&m.sourceChat!==selection.chat;
+  if(user&&m.messageId&&!archive){
+   const control=state.taskControls?.[m.messageId],delivery=deliveries[m.messageId]||m.delivery;
+   const label=control==='cancelled'?'已取消':control==='stopped'?'已停止':delivery!=='sent'?(m.direct?'等待代理接收':'等待總控處理'):null;
    if(label)role.append(el('span','message-time',label));
   }
   if(m.time){const time=el('time','message-time',new Date(m.time).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}));role.append(time);}
+  if(archive&&(user&&m.messageId||m.kind==='collaboration'||m.collaborationId)){
+   const task=el('button','original-task','查看原任務');task.type='button';
+   task.onclick=async()=>{
+    const id=m.collaborationId?'job:'+m.collaborationId:user?'message:'+m.messageId:null;
+    await switchChat(selection.project,m.sourceChat,selectedAgent);
+    if(selection.chat===m.sourceChat)openTasks(id);
+   };
+   role.append(task);
+  }
   bubble.append(role,formatMessage(document,m.text||''));row.append(bubble);if(user)row.append(avatar(null,true));container.append(row);
  }
  if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;}renderReplyProgress();if(wasBottom&&messages.length)$('feed').scrollTop=$('feed').scrollHeight;updateSend();
@@ -546,16 +594,6 @@ window.addEventListener('online',refreshForeground);
 refresh().finally(scheduleRefresh);
 
 $('new-project').onclick=()=>{renderCategoryOptions();$('project-name').value='';$('new-project-category').value='';$('project-dialog').showModal();};
-$('new-chat').onclick=async()=>{
- if(posting||navigating||!state?.project)return;
- const agent=selectedAgent;
- let next;
- navigating=true;updateSend();
- try{next=await api('chat',{agentId:agent});}catch(error){notice(error.message);}
- finally{navigating=false;updateSend();}
- if(next)await switchChat(next.project,next.chat,agent);
- else scheduleRefresh();
-};
 $('project-cancel').onclick=()=>$('project-dialog').close();
 $('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await api('project',{name:$('project-name').value.trim(),category:$('new-project-category').value});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){notice(error.message);}finally{button.disabled=false;}};
 
@@ -697,7 +735,7 @@ function openTeam(){
  $('storage-folder').value=drive?.folder||'';
  $('storage-form').hidden=state?.backendMode!=='background';
 
- $('team-dialog').showModal();
+ renderOtherDrafts();$('other-drafts').open=false;$('team-dialog').showModal();
 }
 $('team-close').onclick=()=>$('team-dialog').close();
 

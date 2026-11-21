@@ -24,7 +24,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261121-recent41',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-agent42',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -55,21 +55,28 @@ export function createServer(config) {
   };
   const activityCache=new Map();
   const legacyAgent='__coordinator__';
-  function chatActivity(scope){
+  const transcriptOwner=row=>row.direct?(row.target||row.agentId):legacyAgent;
+  const leadAgent=(p,members,profile)=>profile.agentId||(p.agentWorkspace&&(members.find(a=>a.id==='starter')?.id||members[0]?.id))||legacyAgent;
+  function transcript(scope){
     const file=path.join(scope.teamDir,'messages.jsonl');
     try{
-      const stat=fs.statSync(file),version=stat.size+':'+stat.mtimeMs,previous=activityCache.get(file);
-      if(previous?.version===version)return previous.activity;
-      const activity=new Map();
-      for(const line of fs.readFileSync(file,'utf8').split('\n')){
+      const stat=fs.statSync(file),version=[stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join(':'),previous=activityCache.get(file);
+      if(previous?.version===version)return previous;
+      const activity=new Map(),rows=[],deliveries=new Map();
+      const lines=fs.readFileSync(file,'utf8').split('\n');
+      for(const [index,line] of lines.entries()){
         if(!line)continue;
         let row;
         try{row=JSON.parse(line);}catch{continue;}
-        if(!['user','reply','collaboration'].includes(row?.kind))continue;
-        const time=Date.parse(row.time);
-        if(!Number.isFinite(time))continue;
-        const owner=row.direct?(row.target||row.agentId):legacyAgent;
+        if(typeof row?.kind!=='string')continue;
+        if(row.kind==='delivery'){
+          if(row.messageId)deliveries.set(row.messageId,row.delivery);
+          continue;
+        }
+        const owner=transcriptOwner(row),time=Date.parse(row.time);
         if(!owner)continue;
+        rows.push({row,index,owner,time});
+        if(!['user','reply','collaboration'].includes(row.kind)||!Number.isFinite(time))continue;
         const entry=activity.get(owner)||{time,title:''};
         entry.time=Math.max(entry.time,time);
         if(!entry.title&&row.kind==='user'&&typeof row.text==='string'){
@@ -78,21 +85,46 @@ export function createServer(config) {
         }
         activity.set(owner,entry);
       }
-      activityCache.set(file,{version,activity});
-      if(activityCache.size>256)activityCache.delete(activityCache.keys().next().value);
-      return activity;
-    }catch{return new Map();}
+      const parsed={version,rows,deliveries,activity};
+      if(stat.size<=2*1024*1024){
+        activityCache.delete(file);
+        activityCache.set(file,parsed);
+        if(activityCache.size>16)activityCache.delete(activityCache.keys().next().value);
+      }
+      return parsed;
+    }catch(error){if(error.code!=='ENOENT')throw error;return {version:'empty',rows:[],deliveries:new Map(),activity:new Map()};}
+  }
+  function agentTimeline(p,c,chat,requestedAgent,before,known){
+    const members=roster(c),lead=leadAgent(p,members,coordinatorProfile(c));
+    if(requestedAgent&&requestedAgent!==legacyAgent&&!members.some(a=>a.id===requestedAgent))throw failure('找不到這位專案代理。',404);
+    const agent=requestedAgent||lead;
+    const sources=p.chats.map((entry,order)=>{
+      const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);
+      return {entry,order,log:transcript(scope)};
+    });
+    const revision=createHash('sha256').update(JSON.stringify([agent,sources.map(s=>[s.entry.id,s.log.version])])).digest('hex');
+    if(!before&&known===revision)return {agent,revision};
+    const records=sources.flatMap(({entry,order,log})=>log.rows.filter(r=>r.owner===agent).map(({row,index,time})=>({
+      key:entry.id+':'+index,chat:entry.id,order,index,time:Number.isFinite(time)?time:Number(entry.createdAt)||0,
+      row,delivery:log.deliveries.get(row.messageId)||row.delivery
+    })));
+    records.sort((a,b)=>a.time-b.time||a.order-b.order||a.index-b.index);
+    const end=before?records.findIndex(r=>r.key===before):records.length;
+    if(end<0)throw failure('訊息清單已更新，請重新整理後再試。',409);
+    const start=Math.max(0,end-100),page=records.slice(start,end);
+    return {agent,revision,before:start>0?page[0].key:null,messages:page.map(r=>({...r.row,delivery:r.delivery,
+      sourceChat:r.chat,timelineId:r.key,timelineAt:r.time,timelineOrder:r.order,timelineIndex:r.index}))};
   }
   function recentConversation(p,requestedAgent){
     const fallback=p.chats.at(-1);
     try{
       const base=ctx(p.folder,null),members=roster(base),profile=coordinatorProfile(base);
-      const lead=profile.agentId||(p.agentWorkspace&&(members.find(a=>a.id==='starter')?.id||members[0]?.id))||legacyAgent;
+      const lead=leadAgent(p,members,profile);
       const agent=members.some(a=>a.id===requestedAgent)?requestedAgent:lead;
       let latestAgent=null,latestLead=null,latestAny=null;
       for(const chat of p.chats){
         const scope=chat.id==='legacy'?base:ctx(p.folder,null,undefined,chat.id);
-        for(const [owner,{time}] of chatActivity(scope)){
+        for(const [owner,{time}] of transcript(scope).activity){
           const entry={chat,time};
           if(!latestAny||time>=latestAny.time)latestAny=entry;
           if(owner===lead&&(!latestLead||time>=latestLead.time))latestLead=entry;
@@ -188,9 +220,10 @@ export function createServer(config) {
     const picked=summary.find(p=>p.id===choice.p.id);
     if(picked&&!picked.available)return{...release,accountQuotas,projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
-    for(const entry of picked.chats){
+    const timeline=url.searchParams.get('timeline')==='1'?agentTimeline(p,c,chat,url.searchParams.get('agent'),null,url.searchParams.get('timelineRevision')):null;
+    if(!timeline)for(const entry of picked.chats){
       const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);
-      entry.topics=Object.fromEntries(chatActivity(scope));
+      entry.topics=Object.fromEntries(transcript(scope).activity);
     }
     const control=read(path.join(c.teamDir,'control.json'));
     let messages=[],messagesRevision='empty';try{const st=fs.statSync(path.join(c.teamDir,'messages.jsonl'));messagesRevision=st.size+':'+st.mtimeMs;messages=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').slice(-300).flatMap(x=>{try{return[JSON.parse(x)];}catch{return[];}});}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -255,7 +288,7 @@ export function createServer(config) {
     }catch{}
     const coordinatorView=terminalViews.find(t=>t.address===owner?.address);
     return {...release,accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
-      terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+      terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   const server=http.createServer(async(req,res)=>{
@@ -276,6 +309,12 @@ export function createServer(config) {
         if(known&&current.messagesRevision===known&&current.project===url.searchParams.get('project')&&
           current.chat===url.searchParams.get('chat'))delete current.messages;
         json(200,current);return;
+      }
+      if(req.method==='GET'&&route==='/api/history'){
+        const {project,chat,agent,before}=Object.fromEntries(url.searchParams);
+        if(!project||!chat||!/^([a-z0-9][a-z0-9-]{0,63}):\d{1,12}$/.test(before||''))throw failure('缺少較早訊息的位置。');
+        const {p,c}=selection(project,chat);
+        json(200,agentTimeline(p,c,chat,agent,before));return;
       }
       if(req.method==='GET'&&route==='/api/artifact'){
         const {project,chat,kind,id,index,mode}=Object.fromEntries(url.searchParams);

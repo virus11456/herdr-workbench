@@ -115,7 +115,6 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 }
 
 #retry-start{min-height:44px;flex-shrink:0;font-size:12px}.statusbar:has(#retry-start:not([hidden])){align-items:center;flex-wrap:wrap}
-.statusbar:has(#task-jump:not([hidden])){align-items:center;gap:8px}
 #add-attachment{flex:none;width:44px;height:44px;padding:0;display:grid;place-items:center;background:transparent;border:0;border-radius:50%;color:var(--muted)}
 #add-attachment:hover,#add-attachment:active{background:var(--hover);color:var(--fg)}
 #add-attachment svg{width:22px;height:22px}
@@ -124,14 +123,7 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 .attachment-chip span{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attachment-chip button{flex:none;min-width:44px;min-height:44px;padding:0;background:transparent;border:0}
 #status,#counts{min-width:0;overflow-wrap:anywhere}
-#task-jump{flex:none;min-height:44px;min-width:44px;padding:7px 11px;font-size:12px;color:var(--fg)}
 #task-summary:focus-visible,.progress-card>summary:focus-visible{outline:2px solid #a2c6f0;outline-offset:-3px;border-radius:10px}
-.agent-topics{margin:2px 8px 7px 40px;padding-inline-start:9px;border-inline-start:1px solid var(--line);display:grid;gap:2px}
-.agent-topic{display:block;min-width:0;min-height:44px;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:12px;text-align:start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.agent-topic[aria-current=true]{background:var(--hover);color:var(--fg)}
-header>.new-chat:not(.icon-button){display:inline-flex;align-items:center;justify-content:center;flex:none;gap:5px;min-height:44px;padding:7px 10px;border:1px solid var(--line);border-radius:10px;color:var(--fg);background:var(--panel);white-space:nowrap}
-header>.new-chat:not(.icon-button):hover,header>.new-chat:not(.icon-button):active{background:var(--hover)}
-.new-chat svg{width:16px;height:16px;flex:none}
 #send{min-width:44px;min-height:44px}
 
 /* Animate the character, never the row or its touch target. */
@@ -172,3 +164,12 @@ header>.new-chat:not(.icon-button):hover,header>.new-chat:not(.icon-button):acti
 #workbench-version{margin:4px 0 12px;font-variant-numeric:tabular-nums}
 
 .member-model{display:block;font-size:12px;color:var(--fg);line-height:1.35;overflow-wrap:anywhere}.member-copy>.member-sub{display:block;line-height:1.35}.member-copy{min-width:0}
+
+#earlier-messages:not([hidden]){display:block;min-height:44px;margin:8px auto 12px;padding:8px 16px}
+.conversation-date{margin:16px auto 8px;color:var(--muted);font-size:12px;text-align:center}
+.original-task{min-height:44px;padding:6px 8px;border:0;background:transparent;color:var(--muted);font-size:12px;text-decoration:underline}
+.original-task:hover{color:var(--fg)}
+#other-drafts:not([hidden]){margin-block:12px}
+#other-drafts summary{min-height:44px;align-content:center;cursor:pointer}
+#other-drafts-list{display:grid;gap:6px}
+#other-drafts-list button{min-height:44px;text-align:start;overflow-wrap:anywhere}

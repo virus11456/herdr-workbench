@@ -37,6 +37,61 @@ test('opening an agent finds its newest active chat while explicit history links
  assert.equal((await state('chat=oldest')).chat,'oldest');
 });
 
+test('agent timeline combines only its own project conversations and pages through older messages',async t=>{
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-timeline-')));
+ const home=path.join(dir,'app'),folder=path.join(dir,'project'),other=path.join(dir,'other');
+ for(const p of [home,folder,other])fs.mkdirSync(p);
+ const chats=[{id:'old',title:'Old'},{id:'current',title:'Current'}];
+ fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[
+  {folder,name:'Fixture',agentWorkspace:true,chats},{folder:other,name:'Other',agentWorkspace:true,chats}
+ ]}));
+ const roster=[{id:'starter',name:'領頭羊',provider:'claude',level:'worker'},
+  {id:'engineer',name:'工程師',provider:'codex',level:'worker'}];
+ for(const p of [folder,other])saveRoster(context(p,null),roster);
+ const row=(target,text,second,fields={})=>({kind:'reply',time:new Date(Date.UTC(2026,10,21,0,0,second)).toISOString(),direct:true,target,text,...fields});
+ const save=(project,chat,rows)=>{
+  const c=context(project,null,null,chat);
+  fs.mkdirSync(c.teamDir,{recursive:true});
+  fs.writeFileSync(path.join(c.teamDir,'messages.jsonl'),rows.map(JSON.stringify).join('\n')+'\n');
+  return path.join(c.teamDir,'messages.jsonl');
+ };
+ const old=save(folder,'old',[
+  row('engineer','file: Herdr 附件/example.txt',0,{kind:'user',messageId:'same',delivery:'queued'}),
+  row('engineer','sent',1,{kind:'delivery',messageId:'same',delivery:'sent'}),
+  ...Array.from({length:101},(_,i)=>row('engineer','older '+i,i+2)),
+  row('starter','leader only',103),
+  row('starter','legacy only',104,{direct:false})
+ ]);
+ save(folder,'current',[row('engineer','latest',110),row('starter','latest leader',111)]);
+ save(other,'old',[row('engineer','other project',112)]);
+ const server=createServer({allowedLogin:'owner@example.test',origin:'https://example.test',appHome:home,
+  core:()=>{throw Error('No agents should start');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port+'/api/';
+ const get=(route,q)=>fetch(base+route+'?'+new URLSearchParams(q),{headers:{'Tailscale-User-Login':'owner@example.test'}});
+ const state=async q=>await(await get('state',q)).json();
+ const initial=await state({timeline:1,latest:1,agent:'engineer'});
+ assert.equal(initial.chat,'current');
+ const {project,chat,timeline}=initial,scope={project,chat,agent:'engineer'};
+ assert.equal(timeline.messages.length,100);
+ assert.equal(timeline.messages[0].text,'older 2');
+ assert.equal(timeline.messages.at(-1).text,'latest');
+ assert.equal(initial.messages.length,2);
+ const page=await(await get('history',{...scope,before:timeline.before})).json();
+ assert.deepEqual(page.messages.map(m=>m.text),['file: Herdr 附件/example.txt','older 0','older 1']);
+ assert.equal(page.messages[0].sourceChat,'old');assert.equal(page.messages[0].delivery,'sent');assert.equal(page.before,null);
+ assert.equal((await get('history',{...scope,agent:'starter',before:timeline.before})).status,409);
+ assert.deepEqual((await state({timeline:1,...scope,agent:'starter'})).timeline.messages.map(m=>m.text),['leader only','latest leader']);
+ const unchanged=await state({timeline:1,...scope,timelineRevision:timeline.revision,messagesRevision:initial.messagesRevision});
+ assert(!Object.hasOwn(unchanged.timeline,'messages'));assert(!Object.hasOwn(unchanged,'messages'));
+ fs.appendFileSync(old,JSON.stringify(row('engineer','old task new reply',113))+'\n');
+ const updated=await state({timeline:1,...scope,timelineRevision:timeline.revision,messagesRevision:initial.messagesRevision});
+ assert.equal(updated.timeline.messages.at(-1).text,'old task new reply');assert(!Object.hasOwn(updated,'messages'));
+ const exact=await state({project,chat:'old',timeline:1,agent:'engineer'});
+ assert.equal(exact.chat,'old');assert.equal(exact.timeline.messages.at(-1).text,'old task new reply');
+});
+
 test('attachment upload stays inside the selected conversation and unchanged refreshes omit history',async t=>{
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-attachment-test-')));
  const home=path.join(root,'app'),folder=path.join(root,'project');
