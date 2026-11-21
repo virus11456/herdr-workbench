@@ -26,6 +26,7 @@ export function deploymentPlan(input,tools){
  const cloud=path.join(os.homedir(),'Library/CloudStorage');if(path.resolve(home).startsWith(cloud+path.sep))throw Error('執行控制資料不得存進雲端同步資料夾。');
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
+ config.codexQuotaCli=tools.codex;
  if(tools.mmx)config.miniMaxQuotaCli=tools.mmx;
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
  for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));

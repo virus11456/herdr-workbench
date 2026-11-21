@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-quota35';
+const UI_BUILD='20261121-quota36';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -439,8 +439,7 @@ function renderUsage(){
    const labels=provider==='minimax'?miniMaxBucket:quotaBucket;
    const bucket=w.bucket&&(Object.hasOwn(labels,w.bucket)?labels[w.bucket]:w.bucket);
    const period=[bucket,w.windowMinutes&&quotaPeriod(w.windowMinutes)].filter(Boolean).join(' · ');
-   const remaining=w.remainingPercent??100-w.usedPercent;
-   group.append(el('dd','',period+' · 剩餘 '+usageNumber.format(remaining)+'% · '+quotaDate(w.resetsAt)+' 重設'));
+   group.append(el('dd','',period+' · 剩餘 '+usageNumber.format(w.remainingPercent)+'% · '+quotaDate(w.resetsAt)+' 重設'));
   }
   group.append(el('dd','','回報於 '+quotaDate(Date.parse(observedAt)/1000)));
   quotaList.append(group);

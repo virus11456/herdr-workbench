@@ -2,12 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {execFile,spawnSync} from 'node:child_process';
+import {execFile,spawn,spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 
 const exec=promisify(execFile);
-const miniMaxRefreshMs=5*60_000;
+const accountRefreshMs=5*60_000;
 
 const statusSources={
  claude:'.claude/settings.json',
@@ -62,6 +62,19 @@ export function quotaFromStatus(provider,payload,now=Date.now()){
    }).filter(w=>w.windowMinutes>0);
   });
  }
+ if(provider==='codex'){
+  const grouped=payload?.rateLimitsByLimitId;
+  const sources=grouped&&typeof grouped==='object'?Object.values(grouped).slice(0,16):[];
+  if(!sources.some(entry=>entry?.limitId===payload?.rateLimits?.limitId))sources.unshift(payload?.rateLimits);
+  windows=sources.flatMap(entry=>{
+   if(!validBucket(entry?.limitId))return [];
+   const bucket=entry.limitId==='codex'?undefined:entry.limitId;
+   return [entry.primary,entry.secondary].flatMap(w=>{
+    if(!percent(w?.usedPercent)||!Number.isSafeInteger(w.windowDurationMins)||w.windowDurationMins<=0)return [];
+    return [{bucket,windowMinutes:w.windowDurationMins,remainingPercent:100-w.usedPercent,resetsAt:w.resetsAt}];
+   });
+  });
+ }
  windows=activeWindows(windows,now);
  return windows.length?{observedAt:new Date(now).toISOString(),windows}:null;
 }
@@ -79,22 +92,18 @@ export function saveQuota(home,provider,payload,now=Date.now()){
  return sample;
 }
 
-// Share one rate-limited lookup across authenticated clients of this Workbench.
-export function miniMaxQuotaRefresher(home,cli,run=exec,clock=Date.now){
+// Share one rate-limited lookup per provider across authenticated clients.
+function accountQuotaRefresher(home,provider,read,clock){
  let nextRefresh=0,inFlight;
  return ()=>{
-  if(!cli)return;
   if(inFlight)return inFlight;
   const now=clock();
   if(now<nextRefresh)return;
-  nextRefresh=now+miniMaxRefreshMs;
+  nextRefresh=now+accountRefreshMs;
   inFlight=(async()=>{
    try{
-    const {stdout}=await run(cli,['quota','show','--output','json'],{
-     cwd:home,env:{HOME:os.homedir(),PATH:process.env.PATH},
-     timeout:8_000,maxBuffer:128*1024
-    });
-    saveQuota(home,'minimax',JSON.parse(stdout),clock());
+    const payload=await read();
+    saveQuota(home,provider,payload,clock());
    }catch{
     // CLI failures may contain local paths or account details.
    }
@@ -103,13 +112,74 @@ export function miniMaxQuotaRefresher(home,cli,run=exec,clock=Date.now){
  };
 }
 
+const localCliEnv=()=>({HOME:os.homedir(),PATH:process.env.PATH});
+
+export function miniMaxQuotaRefresher(home,cli,run=exec,clock=Date.now){
+ if(!cli)return ()=>{};
+ return accountQuotaRefresher(home,'minimax',async()=>{
+  const {stdout}=await run(cli,['quota','show','--output','json'],{
+   cwd:home,env:localCliEnv(),timeout:8_000,maxBuffer:128*1024
+  });
+  return JSON.parse(stdout);
+ },clock);
+}
+
+export function codexAccountLimits(cli,home,launch=spawn){
+ return new Promise((resolve,reject)=>{
+  const child=launch(cli,['app-server','--listen','stdio://'],{cwd:home,env:localCliEnv(),stdio:['pipe','pipe','ignore']});
+  let buffer='',initialized=false,settled=false,receivedBytes=0;
+  const timeout=setTimeout(()=>finish(new Error('Codex quota request timed out')),8_000);
+  function finish(error,result){
+   if(settled)return;
+   settled=true;
+   clearTimeout(timeout);
+   child.stdin.end();
+   child.kill(error?'SIGKILL':'SIGTERM');
+   if(error)reject(error);
+   else resolve(result);
+  }
+  const send=value=>child.stdin.write(JSON.stringify(value)+'\n');
+  child.on('error',finish);
+  child.on('exit',()=>finish(new Error('Codex app server exited')));
+  child.stdin.on('error',finish);
+  child.stdout.on('error',finish);
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data',chunk=>{
+   if(settled)return;
+   receivedBytes+=Buffer.byteLength(chunk);
+   if(receivedBytes>256*1024){finish(new Error('Codex quota response exceeded the size limit'));return;}
+   const lines=(buffer+chunk).split('\n');
+   buffer=lines.pop();
+   for(const line of lines){
+    if(settled)return;
+    let message;
+    try{message=JSON.parse(line);}catch{continue;}
+    if(!initialized&&message?.id===0){
+     if(!message.result){finish(new Error('Codex app server rejected initialization'));return;}
+     initialized=true;
+     send({method:'initialized'});
+     send({id:1,method:'account/rateLimits/read'});
+    }else if(initialized&&message?.id===1){
+     if(!message.result){finish(new Error('Codex quota is unavailable'));return;}
+     finish(null,message.result);
+    }
+   }
+  });
+  send({id:0,method:'initialize',params:{clientInfo:{name:'herdr_workbench',title:'Herdr Workbench',version:'1'}}});
+ });
+}
+
+export function codexQuotaRefresher(home,cli,read=codexAccountLimits,clock=Date.now){
+ return cli?accountQuotaRefresher(home,'codex',()=>read(cli,home),clock):()=>{};
+}
+
 export function readQuotas(home,now=Date.now()){
- return [...Object.keys(statusSources),'minimax'].flatMap(provider=>{
+ return [...Object.keys(statusSources),'codex','minimax'].flatMap(provider=>{
   try{
    const data=JSON.parse(fs.readFileSync(path.join(home,'provider-quota',provider+'.json'),'utf8'));
    const observed=Date.parse(data?.observedAt);
    if(!Number.isFinite(observed)||observed>now||!Array.isArray(data.windows))return [];
-   if(provider==='minimax'&&now-observed>=3*miniMaxRefreshMs)return [];
+   if((provider==='codex'||provider==='minimax')&&now-observed>=3*accountRefreshMs)return [];
    const windows=activeWindows(data.windows.slice(0,32),now).map(({bucket,windowMinutes,remainingPercent,resetsAt})=>({bucket,windowMinutes,remainingPercent,resetsAt}));
    return windows.length?[{provider,observedAt:data.observedAt,windows}]:[];
   }catch{return [];}

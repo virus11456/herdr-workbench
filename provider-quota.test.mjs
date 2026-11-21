@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
-import {miniMaxQuotaRefresher,quotaFromStatus,quotaStatusSettings,readQuotas,saveQuota} from './provider-quota.mjs';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
+import {codexAccountLimits,miniMaxQuotaRefresher,quotaFromStatus,quotaStatusSettings,readQuotas,saveQuota} from './provider-quota.mjs';
 
 const now=Date.UTC(2026,10,21),observedAt=new Date(now).toISOString(),resetsAt=now/1000+60;
 test('Claude status line preserves exhausted windows and hides missing or expired data',()=>{
@@ -84,4 +86,46 @@ test('MiniMax checks share a lookup, back off on errors and age out stale data',
  assert.equal(readQuotas(home,time).length,1);
  time=now+900_000;
  assert.deepEqual(readQuotas(home,time),[]);
+});
+
+test('Codex account limits use the primary and secondary windows once and omit missing or expired periods',()=>{
+ const primary={usedPercent:62,windowDurationMins:10080,resetsAt};
+ const rateLimits={limitId:'codex',primary,secondary:null};
+ const other={limitId:'codex_other',primary:{usedPercent:100,windowDurationMins:300,resetsAt},secondary:{usedPercent:23,windowDurationMins:1440,resetsAt:now/1000}};
+ const payload={accountId:'private',rateLimits,rateLimitsByLimitId:{codex:rateLimits,codex_other:other}};
+ assert.deepEqual(quotaFromStatus('codex',payload,now),{observedAt,windows:[
+  {bucket:undefined,windowMinutes:10080,remainingPercent:38,resetsAt},
+  {bucket:'codex_other',windowMinutes:300,remainingPercent:0,resetsAt}
+ ]});
+ assert.equal(quotaFromStatus('codex',{rateLimits:{limitId:'codex',primary:{...primary,resetsAt:null}}},now),null);
+ assert.equal(quotaFromStatus('codex',{rateLimits},now).windows.length,1);
+});
+
+test('Codex queries the official stdio account method after initialization and closes the child',async()=>{
+ const result={rateLimits:{limitId:'codex',primary:{usedPercent:10,windowDurationMins:300,resetsAt}}};
+ const messages=[],child=new EventEmitter();
+ child.stdin=new PassThrough();child.stdout=new PassThrough();
+ let closedWith;
+ child.kill=signal=>{closedWith=signal;};
+ child.stdin.on('data',chunk=>{
+  const message=JSON.parse(chunk);
+  messages.push(message.method);
+  if(message.method==='initialize'){
+   child.stdout.write('{"id":0,');
+   child.stdout.write('"result":{}}\n');
+  }
+  if(message.method==='account/rateLimits/read'){
+   child.stdout.write('{"method":"account/updated","params":{}}\n');
+   child.stdout.write(JSON.stringify({id:1,result})+'\n');
+  }
+ });
+ const launch=(cli,args,options)=>{
+  assert.equal(cli,'/tool/codex');
+  assert.deepEqual(args,['app-server','--listen','stdio://']);
+  assert.deepEqual(Object.keys(options.env).sort(),['HOME','PATH']);
+  return child;
+ };
+ assert.deepEqual(await codexAccountLimits('/tool/codex','/runtime',launch),result);
+ assert.deepEqual(messages,['initialize','initialized','account/rateLimits/read']);
+ assert.equal(closedWith,'SIGTERM');
 });
