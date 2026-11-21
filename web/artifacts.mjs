@@ -1,11 +1,38 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 
 const images={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp'};
 const textExtensions=new Set(['.txt','.md','.csv','.tsv','.json','.jsonl','.diff','.patch','.js','.mjs','.ts','.css','.py','.go','.rs','.java','.html','.svg','.yaml','.yml']);
 const maxBytes=10*1024*1024,previewLimit=256*1024;
 const fail=(status,message)=>Object.assign(Error(message),{status});
+const exec=promisify(execFile);
+
+async function readDriveItemID(filename){
+ if(process.platform!=='darwin')return null;
+ const {stdout}=await exec('/usr/bin/xattr',['-s','-p','com.google.drivefs.item-id#S',filename],{encoding:'utf8',timeout:1500,maxBuffer:2048});
+ return stdout.trim();
+}
+
+export async function driveArtifactLink(c,item,driveRoot,readID=readDriveItemID){
+ if(!driveRoot)return null;
+ try{
+  const root=await fs.promises.realpath(driveRoot);
+  if(c.cwd!==root&&!c.cwd.startsWith(root+path.sep))return null;
+  const {filename,identity}=item;
+  const sameFile=async()=>{
+   if(await fs.promises.realpath(filename)!==filename)return false;
+   const stat=await fs.promises.lstat(filename);
+   return stat.isFile()&&['dev','ino','size','mtimeMs','ctimeMs'].every(key=>stat[key]===identity[key]);
+  };
+  if(!await sameFile())return null;
+  const id=await readID(filename);
+  if(typeof id!=='string'||!/^[a-zA-Z0-9_-]{16,128}$/.test(id)||!await sameFile())return null;
+  return 'https://drive.google.com/file/d/'+id+'/view';
+ }catch{return null;}
+}
 
 export function artifactReferences(task){
  if(task?.status!=='done')return [];
@@ -41,7 +68,7 @@ export async function readArtifact(c,task,index){
    throw fail(409,'檔案已變更，請重新驗收後再開啟。');
   }
   const text=ref.kind==='text'?data.subarray(0,previewLimit).toString('utf8'):undefined;
-  return {...ref,data,text,truncated:text!==undefined&&data.length>previewLimit};
+  return {...ref,data,text,truncated:text!==undefined&&data.length>previewLimit,filename,identity:stat};
  }catch(error){
   if(error.status)throw error;
   throw fail(404,'找不到可預覽的成果檔案。');

@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261120-version31';
+const UI_BUILD='20261121-drive32';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -180,10 +180,11 @@ async function openArtifact(task,artifact){
  const token=++artifactRequest;
  const query=new URLSearchParams({...selection,kind:task.kind,id:task.id.slice(task.id.indexOf(':')+1),index:artifact.index});
  const url=mode=>'./api/artifact?'+query+'&mode='+mode;
- const dialog=$('artifact-dialog'),image=$('artifact-image'),text=$('artifact-text'),download=$('artifact-download');
+ const dialog=$('artifact-dialog'),image=$('artifact-image'),text=$('artifact-text'),download=$('artifact-download'),drive=$('artifact-drive');
  $('artifact-title').textContent=artifact.name;
  $('artifact-status').textContent='正在核對驗收檔案…';
- image.hidden=text.hidden=download.hidden=true;
+ image.hidden=text.hidden=download.hidden=drive.hidden=true;
+ drive.removeAttribute('href');
  image.removeAttribute('src');text.textContent='';
  dialog.showModal();
  try{
@@ -196,6 +197,7 @@ async function openArtifact(task,artifact){
    text.textContent=result.text;text.hidden=false;
   }
   download.href=url('download');download.hidden=false;
+  if(result.canOpenInDrive){drive.href=url('drive');drive.hidden=false;}
   $('artifact-status').textContent=result.truncated?'顯示前 256 KB，完整內容請下載。':result.kind==='download'?'這個格式可下載查看。':'';
  }catch(error){if(token===artifactRequest&&dialog.open)$('artifact-status').textContent=error.message;}
 }

@@ -138,7 +138,7 @@ test('artifact preview is tied to accepted evidence and serves unchanged bytes w
  const c=contextFor(chats[0].id);fs.mkdirSync(c.teamDir,{recursive:true});
  fs.writeFileSync(path.join(c.teamDir,'checklist.json'),JSON.stringify({items:[{id:'report',status:'done',evidence:[{path:'result.md',sha256:digest},{path:'linked.md',sha256:digest},{path:'../elsewhere.md',sha256:digest},{path:'.config/private.json',sha256:digest}]},{id:'pending',status:'pending',evidence:[{path:'result.md',sha256:digest}]}]}));
  const origin='https://unit.tail.test',headers={'Tailscale-User-Login':'owner@example.test'};
- const server=createServer({allowedLogin:headers['Tailscale-User-Login'],origin,appHome:home});
+ const server=createServer({allowedLogin:headers['Tailscale-User-Login'],origin,appHome:home,driveRoot:folder});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
  const base='http://127.0.0.1:'+server.address().port;
@@ -150,9 +150,33 @@ test('artifact preview is tied to accepted evidence and serves unchanged bytes w
  assert.equal((await fetch(url({chat:chats[1].id}),{headers})).status,404);
  for(const index of ['1','2','3'])assert.equal((await fetch(url({index}),{headers})).status,404);
  assert.equal((await fetch(url({id:'pending'}),{headers})).status,404);
- const preview=await(await fetch(url(),{headers})).json();assert.equal(preview.text,output.toString());
+ const preview=await(await fetch(url(),{headers})).json();assert.equal(preview.text,output.toString());assert.equal(preview.canOpenInDrive,false);
+ const driveURL=url({mode:'drive'});
+ assert.equal((await fetch(driveURL,{headers,redirect:'manual'})).status,404);
+ if(process.platform==='darwin'){
+  const {execFileSync}=await import('node:child_process');
+  execFileSync('/usr/bin/xattr',['-w','com.google.drivefs.item-id#S','verified_drive-artifact_ID',path.join(folder,'result.md')]);
+  assert.equal((await(await fetch(url(),{headers})).json()).canOpenInDrive,true);
+  const link=await fetch(driveURL,{headers,redirect:'manual'});
+  assert.equal(link.status,302);assert.equal(link.headers.get('location'),'https://drive.google.com/file/d/verified_drive-artifact_ID/view');
+  assert.equal((await fetch(url({chat:chats[1].id,mode:'drive'}),{headers,redirect:'manual'})).status,404);
+ }
  const download=await fetch(url({mode:'download'}),{headers});assert.match(download.headers.get('content-disposition'),/^attachment/);assert.equal(download.headers.get('content-type'),'application/octet-stream');assert.deepEqual(Buffer.from(await download.arrayBuffer()),output);
  fs.writeFileSync(path.join(folder,'result.md'),'Changed after verification');assert.equal((await fetch(url(),{headers})).status,409);
+ assert.equal((await fetch(driveURL,{headers,redirect:'manual'})).status,409);
+});
+
+test('Drive original links require a valid provider ID for the same verified file inside the configured root',async t=>{
+ const {createHash}=await import('node:crypto');const {driveArtifactLink,readArtifact}=await import('./artifacts.mjs');
+ const temp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'artifact-drive-id-'))),drive=path.join(temp,'drive'),project=path.join(drive,'project');
+ fs.mkdirSync(project,{recursive:true});t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ const filename=path.join(project,'result.txt'),data='evidence';fs.writeFileSync(filename,data);
+ const c={cwd:project},item=await readArtifact(c,{status:'done',evidence:[{path:'result.txt',sha256:createHash('sha256').update(data).digest('hex')}]},0);
+ const id='test-GoogleDrive_ID-00001';
+ assert.equal(await driveArtifactLink(c,item,drive,async name=>{assert.equal(name,filename);return id;}),'https://drive.google.com/file/d/'+id+'/view');
+ assert.equal(await driveArtifactLink(c,item,drive,async()=>id+'?next=other'),null);
+ assert.equal(await driveArtifactLink(c,item,path.join(temp,'drive-other'),()=>assert.fail()),null);
+ assert.equal(await driveArtifactLink(c,item,drive,async()=>{fs.unlinkSync(filename);fs.writeFileSync(filename,data);return id;}),null);
 });
 
 test('project memory is shared across chats with a revision check and stays outside the project folder',async t=>{

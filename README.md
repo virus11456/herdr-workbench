@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.2-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.2-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.2-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.3-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.3-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.3-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -145,7 +145,7 @@ npm test
 
 取消後可從任務卡按「重新編輯」，已確認停止則可按「準備接續」。兩者只填入草稿。已有草稿時，請先處理原草稿。「準備接續」會請代理先查看已完成的成果，再做剩餘工作。
 
-已驗收且雜湊仍一致的專案成果可從任務卡預覽或下載。圖片、文字、程式碼和 diff 可預覽，PDF 可下載。檔案改動後需重新驗收。
+已驗收且雜湊仍一致的專案成果可從任務卡預覽或下載。位於主機 Google Drive 串流資料夾且已取得檔案 ID 的成果，預覽視窗會顯示「在 Google Drive 開啟」，直接開啟同一份原檔。圖片、文字、程式碼和 diff 可預覽，PDF 可下載。檔案改動後需重新驗收。
 
 輸入 `@` 可查找目前專案的代理，也可從輸入框旁按「協作」勾選多位成員，將名單加到草稿後自行確認送出。
 

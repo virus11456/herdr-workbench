@@ -1,7 +1,7 @@
 import {conversationUsage} from './usage.mjs';
 import {projectMemory,saveProjectMemory} from '../project-memory.mjs';
 import {createPushStore} from './push.mjs';
-import {artifactReferences,readArtifact} from './artifacts.mjs';
+import {artifactReferences,driveArtifactLink,readArtifact} from './artifacts.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
 import {enqueueDirect,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
@@ -20,7 +20,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261120-version31',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261121-drive32',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -117,11 +117,16 @@ export function createServer(config) {
       if(req.method==='GET'&&route==='/api/state'){json(200,await state(url));return;}
       if(req.method==='GET'&&route==='/api/artifact'){
         const {project,chat,kind,id,index,mode}=Object.fromEntries(url.searchParams);
-        if(!project||!chat||!['checklist','collaboration'].includes(kind)||!/^[a-z0-9-]{1,64}$/.test(id||'')||!/^\d{1,3}$/.test(index||'')||!['preview','image','download'].includes(mode))throw failure('成果檔案識別碼無效。');
+        if(!project||!chat||!['checklist','collaboration'].includes(kind)||!/^[a-z0-9-]{1,64}$/.test(id||'')||!/^\d{1,3}$/.test(index||'')||!['preview','image','download','drive'].includes(mode))throw failure('成果檔案識別碼無效。');
         const {c}=selection(project,chat);
         const task=kind==='checklist'?checklist(c).items.find(item=>item.id===id):Object.values(read(path.join(c.teamDir,'collaborations.json'),{})).find(job=>job.id===id);
         const item=await readArtifact(c,task,Number(index));
-        if(mode==='preview'){json(200,{kind:item.kind,name:item.name,text:item.text,truncated:item.truncated});return;}
+        if(mode==='preview'||mode==='drive'){
+          const driveLink=await driveArtifactLink(c,item,config.driveRoot);
+          if(mode==='preview'){json(200,{kind:item.kind,name:item.name,text:item.text,truncated:item.truncated,canOpenInDrive:!!driveLink});return;}
+          if(!driveLink)throw failure('尚未取得這份成果的 Google Drive 連結。',404);
+          res.writeHead(302,{Location:driveLink});res.end();return;
+        }
         if(mode==='image'&&item.kind!=='image')throw failure('這個檔案沒有圖片預覽。',404);
         res.setHeader('Cross-Origin-Resource-Policy','same-origin');
         if(mode==='download')res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(item.name).replace(/['()*]/g,ch=>'%'+ch.charCodeAt(0).toString(16))}`);
