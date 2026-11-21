@@ -21,6 +21,10 @@ export function canCreateAgent(c, agentId) {
   const leader=appointed||(roster(c).some(a=>a.id==='starter')?'starter':null);
   return (agentId||null)===leader;
 }
+export function canProvisionForMessage(c, agentId, policy) {
+  return canCreateAgent(c, agentId) && (policy === true ||
+    policy === 'when-alone' && roster(c).every(agent => agent.id === agentId));
+}
 export function missingTerminal(error) {
  try{return (error?.error?.kind||JSON.parse(String(error?.stdout||error?.stderr||'{}')).error?.kind)==='not_found';}catch{return false;}
 }
@@ -65,7 +69,7 @@ export function saveRoster(c,value) {
   });
 }
 export function teamBrief(c) {
-  return '專案協作：由使用者指定目標、代理與分工，不預設部門、工作順序或引擎職責。專案代理名冊（設定角色不代表已啟動）：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
+  return '專案協作：使用者交付目標後，你先拆解並判斷應該由誰執行。使用者在文字中點名某位代理或指定分工時，依要求實際派工。未指定人選時，依專案名冊和職責主動派工，需要協作即可用既有代理。單純問候、狀態查詢或簡單問題可直接答覆。點名、分析或選人都不能代替實際送達。專案代理名冊：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
     '你是這段對話的協調入口，不是整個工作台唯一的中介。使用者可直接和每位代理聊天；已加入的代理可依使用者授權，透過工作台在彼此對話交付協作、收取真實回報、退回修正並驗收。不能宣稱所有訊息或代理協作都必須經過你。只處理交付給你的任務，不強制規劃→開發→審查。'+
     '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
@@ -192,9 +196,9 @@ export function enqueueChat(c, text, id=randomUUID(), allowAgentCreation=false) 
   const dir=path.join(paths(c).dir,'chat-queue');
   for(const suffix of ['.json.cancelled','.json','.json.sent']){
     const existing=read(path.join(dir,id+suffix));
-    if(existing){if(existing.original!==original||!!existing.allowAgentCreation!==allowAgentCreation)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix!=='.json.cancelled',target:existing.target,...(suffix==='.json.cancelled'?{status:'cancelled'}:{})};}
+    if(existing){if(existing.original!==original||(existing.allowAgentCreation??false)!==allowAgentCreation)throw Error('訊息 ID 已被其他內容使用。');return{id,queued:suffix!=='.json.cancelled',target:existing.target,...(suffix==='.json.cancelled'?{status:'cancelled'}:{})};}
   }
-  if(allowAgentCreation&&(!canCreateAgent(c,null)||routed.target!=='team'))throw Error('請將新增代理的授權交給目前的領頭羊。');
+  if(allowAgentCreation===true&&(!canCreateAgent(c,null)||routed.target!=='team'))throw Error('請將新增代理的授權交給目前的領頭羊。');
   save(path.join(dir,`${id}.json`),{id,original,...routed,allowAgentCreation,createdAt:new Date().toISOString(),sequence:process.hrtime.bigint().toString().padStart(24,'0')});
   log(c,'你',original,'user',{messageId:id,delivery:'queued',target:routed.target});
   return {id,queued:true,target:routed.target};
@@ -284,7 +288,7 @@ export function drainChats(c) {
       const routed=routeMessage(msg.original,roster(c));
       if(routed.target!==msg.target)throw Error('Queued recipient changed; refusing to redirect.');
       save(leaseFile,{terminal:control.terminal,time:Date.now(),messageId:msg.id,chat:c.chat});
-      const creation=msg.allowAgentCreation&&canCreateAgent(c,null)?msg.id:null;
+      const creation=routed.target==='team'&&canProvisionForMessage(c,null,msg.allowAgentCreation)?msg.id:null;
       save(path.join(teamDir(c),'legacy-message.json'),{id:msg.id,terminal:control.terminal,creation});
       c.run('hc',['send',control.terminal,teamBrief(c)+'\n'+agentCreationPrompt(creation)+'\n\n'+routed.text]);
       fs.renameSync(path.join(dir,name),path.join(dir,name+'.sent'));

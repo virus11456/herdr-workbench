@@ -20,7 +20,7 @@ test('reply indicator never calls queued messages delivered, isolates agents, an
  assert.equal(replyProgress({...base,messages:[user,delivery]}).phase,'working');
  const other={kind:'reply',direct:true,target:'other',replyTo:user.messageId,time:'2026-11-20T00:00:02Z'};
  const done={...terminal,status:{app:'codex',state:'done'}};
- assert.equal(replyProgress({...base,terminal:done,messages:[user,delivery,other]}).phase,'delivered');
+ assert.deepEqual(replyProgress({...base,terminal:done,messages:[user,delivery,other]}),{phase:'unconfirmed',text:'已送達 工程師，回覆未核對',animate:false});
  const answer={...other,target:'engineer'};assert.equal(replyProgress({...base,terminal:done,messages:[user,delivery,answer]}),null);
  assert.equal(replyProgress({...base,terminal:{...terminal,status:{app:'codex',state:'blocked'}},messages:[user,delivery]}).animate,false);
  assert.equal(replyProgress({...base,terminal:{...done,waitingCollaboration:true},messages:[user,delivery,answer]}).phase,'collaboration');

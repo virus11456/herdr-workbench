@@ -3,7 +3,7 @@ import {context,saveRoster,captureReply,switchAgentModel,roster,appointAgent,enq
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {minimaxReply} from './minimax-reply.mjs';
 function fixture(t){const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-direct-unit-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const c=context(root,null,null,'unit-chat',{headless:true,stateRoot:path.join(root,'private')});saveRoster(c,[{id:'engineer',name:'Engineer',provider:'codex',level:'worker'}]);return{c,root};}
-for(const direct of [false,true])test(`only the ${direct?'appointed':'legacy'} leader can provision one specialist for an authorized message and verify its report`,t=>{
+for(const [direct,automatic] of [[false,false],[true,false],[false,true],[true,true]])test(`only the ${direct?'appointed':'legacy'} leader can provision one specialist for an authorized message and verify its report (${automatic?'automatic when alone':'older explicit grant'})`,t=>{
  const {c}=fixture(t),leader='tunitlead',worker='tunitworker',messageId='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
  const cases={
   [leader]:{app:'claude-code',state:'idle',labels:direct?{'team.direct':'true','team.chat':c.chat,'team.agent':'engineer'}:{}},
@@ -32,16 +32,17 @@ for(const direct of [false,true])test(`only the ${direct?'appointed':'legacy'} l
   saveRoster(c,roster(c).map(agent=>({...agent,provider:'claude'})));
   appointAgent(c,'engineer');
   fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[leader]:{agentId:'engineer',provider:'claude',chat:c.chat}}));
- }else fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:leader}));
- assert.throws(()=>collaborate(current,{action:'create-agent-and-delegate',messageId}),/開啟新增代理/);
+ }else {fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:leader}));if(automatic)saveRoster(c,[]);}
+ assert.throws(()=>collaborate(current,{action:'create-agent-and-delegate',messageId}),/不能新增代理/);
  reply(request('Unauthorized specialist'));
  assert.equal(fs.existsSync(jobFile),false);
- if(direct){enqueueDirect(c,'engineer','Hire one arithmetic checker',messageId,true);assert.equal(drainDirect(c).sent,1);}
- else{enqueueChat(c,'Hire one arithmetic checker',messageId,true);assert.equal(drainChats(c).sent,1);}
+ const mode=automatic?'when-alone':true;
+ if(direct){enqueueDirect(c,'engineer','Hire one arithmetic checker',messageId,mode);assert.equal(drainDirect(c).sent,1);}
+ else{enqueueChat(c,'Hire one arithmetic checker',messageId,mode);assert.equal(drainChats(c).sent,1);}
  assert(sent.at(-1).text.includes(messageId));
  reply('我會安排核對。\n'+request('Arithmetic checker')+'\n'+request('Too many'));
  const jobs=()=>Object.values(JSON.parse(fs.readFileSync(jobFile,'utf8'))),job=()=>jobs()[0];
- assert.equal(jobs().length,1);assert.equal(job().status,'provisioning');assert.equal(roster(c).length,1);
+ assert.equal(jobs().length,1);assert.equal(job().status,'provisioning');assert.equal(roster(c).length,automatic&&!direct?0:1);
  reply(request('Replayed request'));
  assert.equal(drainDirect(c).started,worker);
  assert.equal(jobs().length,1);
@@ -58,7 +59,7 @@ for(const direct of [false,true])test(`only the ${direct?'appointed':'legacy'} l
  assert.equal(drainCollaboration(c).sent,1);assert.equal(sent.at(-1).id,leader);
  reply('驗收完成。\n<herdr-action>'+JSON.stringify({action:'accept',id:job().id,revision:job().revision,verification:'Verified that 21+21 equals 42',evidence:[]})+'</herdr-action>');
  assert.equal(job().status,'done');assert.equal(job().evidence[0].type,'terminal-read');
- assert.equal(roster(c).length,2);
+ assert.equal(roster(c).length,automatic&&!direct?1:2);
 });
 test('direct conversation starts its selected engine once, needs no coordinator, and reuses its session',t=>{
  const {c}=fixture(t),calls=[],terminals=[];let state='idle';

@@ -12,3 +12,15 @@ test('task actions follow server eligibility and cancelled messages do not show 
  assert.equal(taskCards(state)[0].phase,'cancelled');
  assert.equal(taskCards(state)[0].action,undefined);
 });
+
+test('shared decisions and unlinked historical replies do not count as running work',()=>{
+ const historical={kind:'reply',direct:true,target:'a',text:'Older reply without a message identifier'};
+ const cards=taskCards({
+  ...base,
+  terminals:[{...terminal,status:{app:'codex',state:'done'}}],
+  checklist:{items:[{id:'decision',title:'Confirm plan',status:'pending',owner:'Frank'}]},
+  messages:[user,delivery,historical]
+ },'a');
+ assert.deepEqual(cards.map(card=>card.phase),['pending','unconfirmed']);
+ assert.deepEqual(taskSummary(cards),{active:0,attention:1,review:0,verified:0,replied:0,unconfirmed:1});
+});

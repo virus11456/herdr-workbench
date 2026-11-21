@@ -5,6 +5,7 @@ import {codexQuotaRefresher,miniMaxQuotaRefresher,readQuotas} from '../provider-
 import {projectMemory,saveProjectMemory} from '../project-memory.mjs';
 import {createPushStore} from './push.mjs';
 import {artifactReferences,driveArtifactLink,readArtifact} from './artifacts.mjs';
+import {messageWithAttachments,uploadAttachment} from './attachments.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
 import {enqueueDirect,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
@@ -23,7 +24,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261121-model38',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261121-chat40',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -213,7 +214,11 @@ export function createServer(config) {
       if(req.method==='GET'&&route==='/api/notifications-key'){json(200,{publicKey:push.publicKey()});return;}
       if(req.method==='GET'&&route==='/api/state'){
         refreshCodex();refreshMiniMax();
-        json(200,await state(url));return;
+        const current=await state(url);
+        const known=url.searchParams.get('messagesRevision');
+        if(known&&current.messagesRevision===known&&current.project===url.searchParams.get('project')&&
+          current.chat===url.searchParams.get('chat'))delete current.messages;
+        json(200,current);return;
       }
       if(req.method==='GET'&&route==='/api/artifact'){
         const {project,chat,kind,id,index,mode}=Object.fromEntries(url.searchParams);
@@ -232,6 +237,16 @@ export function createServer(config) {
         if(mode==='download')res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(item.name).replace(/['()*]/g,ch=>'%'+ch.charCodeAt(0).toString(16))}`);
         res.writeHead(200,{'Content-Type':mode==='image'?item.mime:'application/octet-stream','Content-Length':item.data.length});
         res.end(item.data);return;
+      }
+      if(req.method==='POST'&&route==='/api/attachment'){
+        if(req.headers.origin!==config.origin||req.headers['x-herdr-csrf']!==csrf||
+          req.headers['content-type']!=='application/octet-stream')throw failure('請重新整理頁面後再試。',403);
+        const {project,chat,id,slot}=Object.fromEntries(url.searchParams);
+        if(!project||!chat)throw failure('缺少附件的專案或對話。');
+        const {c}=selection(project,chat);
+        const name=decodeURIComponent(req.headers['x-herdr-filename']||'');
+        if(!name)throw failure('缺少附件名稱。');
+        json(201,await uploadAttachment(req,c,id,slot,name));return;
       }
       if(req.method==='POST'&&route.startsWith('/api/')) {
         if(req.headers.origin!==config.origin || req.headers['x-herdr-csrf']!==csrf || !String(req.headers['content-type']).startsWith('application/json'))throw failure('請重新整理頁面後再試。',403);
@@ -306,15 +321,17 @@ export function createServer(config) {
         if(route==='/api/appoint'){json(200,appointAgent(c,data.agentId));return;}
         if(route==='/api/coordinator'){json(200,setCoordinatorName(c,data.name,data.provider));return;}
         if(route==='/api/message'){if(managementActive(c))throw failure('Agent routing is being updated; retry shortly.',409);
-          if(typeof data.text!=='string'||!data.text.trim()||data.text.length>12000)throw failure('請填寫任務（最多 12000 字）。');
+          if(typeof data.text!=='string'||(!data.text.trim()&&data.attachments===undefined)||data.text.length>12000)throw failure('請填寫任務（最多 12000 字），或加入附件。');
           if(typeof data.id!=='string'||!/^[a-f0-9-]{36}$/.test(data.id))throw failure('缺少訊息識別碼。');
           if(data.allowAgentCreation!==undefined&&typeof data.allowAgentCreation!=='boolean')throw failure('新增代理授權無效。');
-          const allowAgentCreation=data.allowAgentCreation===true;
+          const allowAgentCreation=data.allowAgentCreation??'when-alone';
           const key=p.id+':'+chat+':'+data.id;
           if(lastMessages.has(key)){json(200,lastMessages.get(key));return;}
           // Queue through the existing runtime. This endpoint cannot invoke arbitrary CLI commands.
           const mentioned=roster(c).flatMap(a=>[a.id,a.name].map(alias=>({a,prefix:'@'+alias}))).sort((a,b)=>b.prefix.length-a.prefix.length).find(x=>data.text.startsWith(x.prefix)&&/^[\s：:，,]/.test(data.text.slice(x.prefix.length,x.prefix.length+1)));
-          const recipient=mentioned?.a.id||data.agentId,text=mentioned?data.text.slice(mentioned.prefix.length).replace(/^[\s：:，,]+/,''):data.text;
+          const recipient=mentioned?.a.id||data.agentId;
+          const body=mentioned?data.text.slice(mentioned.prefix.length).replace(/^[\s：:，,]+/,''):data.text;
+          const text=await messageWithAttachments(c,data.id,body,data.attachments);
           const result=recipient?enqueueDirect(c,recipient,text,data.id,allowAgentCreation):enqueueChat(c,text,data.id,allowAgentCreation);rememberSelection(p,chat);lastMessages.set(key,result);
           if(lastMessages.size>1000)lastMessages.delete(lastMessages.keys().next().value);
           json(200,result);return;

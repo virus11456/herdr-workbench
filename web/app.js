@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-model38';
+const UI_BUILD='20261121-chat40';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -81,33 +81,87 @@ function renderReplyProgress(){
  if(progress.animate){const dots=el('span','reply-dots');dots.setAttribute('aria-hidden','true');for(let i=0;i<3;i++)dots.append(el('i'));box.append(dots);}
 }
 const draftKey=()=>`herdr-draft:${selection.project}:${selection.chat}:${selectedAgent||'team'}`;
-let allowAgentCreation=false;
-const mayCreateAgent=()=>state?.agentCreationEnabled&&
- (selectedAgent||null)===(state.coordinatorAgentId||(state.agents.some(a=>a.id==='starter')?'starter':null));
-function persistDraft(){try{localStorage.setItem(draftKey(),$('draft').value);if(allowAgentCreation)localStorage.setItem(draftKey()+':allow-create','1');else localStorage.removeItem(draftKey()+':allow-create');}catch{}}
+const attachmentsByDraft=new Map();
+const currentAttachments=()=>attachmentsByDraft.get(draftKey())||[];
+const fileSizeLimit=15*1024*1024;
+const fileCountLimit=4;
+let attachmentSnapshot='';
+function renderAttachments(){
+ const files=currentAttachments(),key=JSON.stringify([draftKey(),posting,files.map(f=>f.name)]);
+ if(key===attachmentSnapshot)return;
+ attachmentSnapshot=key;
+ const list=$('attachment-list');
+ list.replaceChildren();
+ list.hidden=!files.length;
+ files.forEach((file,index)=>{
+  const row=el('div','attachment-chip'),name=el('span','',file.name),remove=el('button','','×');
+  name.title=file.name;remove.type='button';remove.disabled=posting;
+  remove.setAttribute('aria-label','移除附件 '+file.name);
+  remove.onclick=()=>{
+   const key=draftKey(),next=files.filter((_,i)=>i!==index);
+   if(next.length)attachmentsByDraft.set(key,next);else attachmentsByDraft.delete(key);
+   try{localStorage.removeItem(key+':pending');}catch{}
+   updateSend();$('add-attachment').focus();
+  };
+  row.append(name,remove);list.append(row);
+ });
+}
+$('add-attachment').onclick=()=>$('attachment-input').click();
+$('attachment-input').onchange=event=>{
+ const input=event.currentTarget,files=[...input.files],current=currentAttachments();
+ input.value='';
+ if(posting||!state?.project||!files.length)return;
+ if(current.length+files.length>fileCountLimit){notice('每則訊息最多附 4 個檔案。');return;}
+ if(files.some(file=>file.size<1||file.size>fileSizeLimit)){notice('請選擇 15 MB 以內的非空檔案。');return;}
+ attachmentsByDraft.set(draftKey(),[...current,...files]);
+ notice('附件已加入草稿，送出時才會上傳。');updateSend();
+};
+async function uploadFiles(scope,id,files,csrf){
+ const names=[];
+ for(const [slot,file] of files.entries()){
+  notice(`正在上傳附件 ${slot+1}/${files.length}`);
+  const query=new URLSearchParams({...scope,id,slot});
+  const response=await fetch('./api/attachment?'+query,{
+   method:'POST',headers:{'Content-Type':'application/octet-stream','X-Herdr-CSRF':csrf,
+    'X-Herdr-Filename':encodeURIComponent(file.name)},body:file
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||'附件上傳失敗。');
+  names.push(result.name);
+ }
+ return names;
+}
+const coordinatorRecipient=()=>state.coordinatorAgentId||state.agents.find(a=>a.id==='starter')?.id||null;
+function persistDraft(){try{localStorage.setItem(draftKey(),$('draft').value);}catch{}}
 function restoreDraft(){
- try{$('draft').value=localStorage.getItem(draftKey())||'';allowAgentCreation=localStorage.getItem(draftKey()+':allow-create')==='1';}
- catch{$('draft').value='';allowAgentCreation=false;}
+ try{$('draft').value=localStorage.getItem(draftKey())||'';}
+ catch{$('draft').value='';}
  updateSend();
 }
 function updateSend(){
- $('send').disabled=posting||!state?.project||state?.projectAvailable===false||!$('draft').value.trim();
- const picker=$('collaboration-picker'),enabled=mayCreateAgent()&&allowAgentCreation;
- picker.hidden=!mayCreateAgent()&&!state?.agents.some(agent=>agent.id!==selectedAgent);
- picker.disabled=posting||state?.projectAvailable===false;
- picker.textContent=enabled?'協作 ✓':'協作';
- picker.setAttribute('aria-label',enabled?'協作，本則允許新增代理':'協作');
+ const unavailable=posting||!state?.project||state?.projectAvailable===false;
+ $('send').disabled=unavailable||(!$('draft').value.trim()&&!currentAttachments().length);
+ $('add-attachment').disabled=unavailable;
+ $('draft').readOnly=posting;
+ renderAttachments();
  fitDraft();
 }
 function notice(text){$('notice').textContent=text;}
-async function api(route,data){
- const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...selection,...data}):undefined});
+async function api(route,data,scope=selection){
+ const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...scope,...data}):undefined});
  const result=await response.json();if(!response.ok)throw Error(result.error||'連線失敗');return result;
 }
 async function refresh(){
  const n=++revision;const q=new URLSearchParams();if(selection.project)q.set('project',selection.project);if(selection.chat)q.set('chat',selection.chat);
+ const previous=state;
+ if(previous?.project===selection.project&&previous.chat===selection.chat&&previous.messagesRevision&&Array.isArray(previous.messages)){
+  q.set('messagesRevision',previous.messagesRevision);
+ }
  try{
   const result=await api('state?'+q);if(n!==revision)return;
+  if(previous&&!Object.hasOwn(result,'messages')&&result.project===previous.project&&result.chat===previous.chat&&result.messagesRevision===previous.messagesRevision){
+   result.messages=previous.messages;
+  }
   const first=!state;state=result;selection.project=result.project||null;selection.chat=result.chat||null;
   const link=new URL(location.href);if(selection.project)link.searchParams.set('project',selection.project);if(selection.chat)link.searchParams.set('chat',selection.chat);if(selectedAgent)link.searchParams.set('agent',selectedAgent);else link.searchParams.delete('agent');history.replaceState(null,'',link);
   if(selectedAgent&&!currentAgent())selectedAgent=null;if(state.agentWorkspace&&!selectedAgent)selectedAgent=state.agents.find(a=>a.id===state.coordinatorAgentId)?.id||state.agents[0]?.id||null;
@@ -174,11 +228,13 @@ function renderAttention(){
 }
 function prepareTaskDraft(task){
  if(posting)return;
- if(task.agentId&&!state.agents.some(agent=>agent.id===task.agentId)){
+ const checklistTask=task.kind==='checklist';
+ const recipient=checklistTask?coordinatorRecipient():task.agentId;
+ if(recipient&&!state.agents.some(agent=>agent.id===recipient)){
   notice('原代理已不在此專案，請先選擇接手的代理。');
   return;
  }
- if(selectedAgent!==task.agentId)switchAgent(task.agentId,false);
+ if(selectedAgent!==recipient)switchAgent(recipient,false);
  const input=$('draft');
  if(input.value.trim()){
   notice('這段對話已有草稿，請先處理草稿再載入任務。');
@@ -188,14 +244,15 @@ function prepareTaskDraft(task){
  const key=draftKey()+':pending';
  try{
   const pending=JSON.parse(localStorage.getItem(key)||'null');
-  if(pending?.id===task.id.slice('message:'.length))localStorage.removeItem(key);
+  if(!checklistTask&&pending?.id===task.id.slice('message:'.length))localStorage.removeItem(key);
   else if(pending){
    notice('上一筆送出結果尚未確認，請先查看對話狀態。');
    return;
   }
  }catch{}
- const prompt='請接續以下中斷的任務。先檢查目前已完成的內容和檔案，再繼續未完成的部分。\n\n';
- input.value=task.phase==='stopped'?prompt+task.title:task.title;
+ const resume='請接續以下中斷的任務。先檢查目前已完成的內容和檔案，再繼續未完成的部分。\n\n';
+ const decision=`關於「${task.title}」，我的回覆如下。請先核對我確認的範圍，再依已確認的內容安排下一步。\n\n`;
+ input.value=checklistTask?decision:task.phase==='stopped'?resume+task.title:task.title;
  persistDraft();updateSend();input.focus();
  notice(input.value.length>12000?'已載入草稿。送出前請把內容縮短到 12000 字。':'已載入草稿，編輯好再送出。');
 }
@@ -227,11 +284,23 @@ async function openArtifact(task,artifact){
 }
 $('artifact-close').onclick=()=>$('artifact-dialog').close();
 $('artifact-dialog').addEventListener('close',()=>{artifactRequest++;$('artifact-image').removeAttribute('src');});
+$('task-jump').onclick=()=>{
+ const panel=$('task-checklist');
+ panel.open=true;
+ $('task-summary').focus({preventScroll:true});
+ panel.scrollIntoView({block:'start'});
+};
 function renderTasks(){
- const tasks=taskCards(state,selectedAgent),totals=taskSummary(tasks),key=JSON.stringify([selection,selectedAgent,tasks]);$('task-checklist').hidden=historyVisible||!tasks.length;
- $('task-summary').textContent='任務進度'+(totals.attention?' · '+totals.attention+' 等待處理':totals.active?' · '+totals.active+' 進行中':totals.review?' · '+totals.review+' 待驗收':' · '+totals.verified+' 已驗收');
+ const tasks=taskCards(state,selectedAgent),totals=taskSummary(tasks),key=JSON.stringify([selection,selectedAgent,tasks]);
+ $('task-checklist').hidden=historyVisible||!tasks.length;
+ $('task-jump').hidden=$('task-checklist').hidden;
+ const pending=totals.attention+totals.review;
+ $('task-jump').textContent=pending?'任務 · '+pending:'任務';
+ $('task-jump').setAttribute('aria-label',pending?`查看任務，${pending} 項待處理或待驗收`:'查看任務');
+ const segments=[[totals.attention,'待處理'],[totals.review,'待驗收'],[totals.active,'執行或排隊'],[totals.verified,'已驗收'],[totals.replied,'已回覆'],[totals.unconfirmed,'回覆未核對']];
+ $('task-summary').textContent=['任務進度',...segments.filter(([n])=>n).map(([n,label])=>n+' '+label)].join(' · ');
  if(key===checklistSnapshot)return;checklistSnapshot=key;const open=new Set([...$('task-items').querySelectorAll('details[open]')].map(n=>n.dataset.id));$('task-items').replaceChildren();
- const rank={blocked:0,stopped:1,working:2,delivered:3,queued:4,review:5,replied:6,done:7,cancelled:8};
+ const rank={blocked:0,pending:1,review:2,working:3,queued:4,stopped:5,unconfirmed:6,replied:7,done:8,cancelled:9};
  for(const task of tasks.sort((a,b)=>rank[a.phase]-rank[b.phase])){const row=el('details','progress-card');row.dataset.id=task.id;row.dataset.phase=task.phase;row.open=open.has(task.id);const summary=el('summary'),title=el('span','task-title',task.title.slice(0,140)),badge=el('span','task-badge',taskLabels[task.phase]);summary.append(title,badge);row.append(summary,el('p','task-owner',(task.source?task.source+' → ':'')+task.owner));
   if(task.acceptance)row.append(el('p','','驗收條件：'+task.acceptance));if(task.verification)row.append(el('p','','驗收結果：'+task.verification));if(task.detail)row.append(el('p','',task.detail));
   if(task.phase==='review')row.append(el('p','','代理已回報，等待交付者核對；尚未驗收完成。'));
@@ -240,8 +309,9 @@ function renderTasks(){
    button.type='button';button.setAttribute('aria-label','查看成果 '+artifact.name);
    button.onclick=()=>openArtifact(task,artifact);row.append(button);
   }
-  if(task.canPrepareDraft){
-   const button=el('button','',task.phase==='cancelled'?'重新編輯':'準備接續');
+  const canReply=task.kind==='checklist'&&['pending','blocked'].includes(task.phase);
+  if(canReply||task.canPrepareDraft){
+   const button=el('button','',canReply?'準備回覆給領頭羊':task.phase==='cancelled'?'重新編輯':'準備接續');
    button.type='button';button.onclick=()=>prepareTaskDraft(task);row.append(button);
   }else if(task.kind!=='checklist'){
    const button=el('button','','前往代理對話');
@@ -332,42 +402,39 @@ mentionBox.onkeydown=event=>{
  if(event.key==='Escape'){mentionBox.hidden=true;$('draft').focus();}
 };
 document.addEventListener('focusin',event=>{if(event.target!==$('draft')&&!mentionBox.contains(event.target))mentionBox.hidden=true;});
-$('collaboration-picker').onclick=()=>{
- if(posting)return;
- const list=$('collaboration-members');list.replaceChildren();
- for(const agent of state.agents.filter(a=>a.id!==selectedAgent)){
-  const label=el('label'),box=el('input');box.type='checkbox';box.value=agent.id;
-  label.append(box,el('span','',agent.name+' · '+providerName(agent.provider)));list.append(label);
- }
- $('allow-agent-creation-label').hidden=!mayCreateAgent();
- $('allow-agent-creation').checked=allowAgentCreation&&mayCreateAgent();
- $('collaboration-notice').textContent='';
- $('collaboration-dialog').showModal();
-};
-$('collaboration-close').onclick=()=>$('collaboration-dialog').close();
-$('collaboration-form').onsubmit=event=>{
- event.preventDefault();if(posting)return;
- const ids=[...$('collaboration-members').querySelectorAll('input:checked')].map(box=>box.value);
- const agents=state.agents.filter(a=>ids.includes(a.id)&&a.id!==selectedAgent);
- if(agents.length!==ids.length){$('collaboration-notice').textContent='代理名單已更新，請關閉後重新選擇。';return;}
- const allow=mayCreateAgent()&&$('allow-agent-creation').checked;
- const draft=$('draft');
- if((allow||agents.length)&&draft.value.trimStart().startsWith('@')){$('collaboration-notice').textContent='草稿已有 @ 收件者。請移除 @ 後再設定協作。';return;}
- if(agents.length){
-  const collaborators=agents.map(a=>a.name+'（'+a.id+'）').join('、');
-  draft.value='請與以下專案代理協作：'+collaborators+'。\n\n'+draft.value;
- }
- allowAgentCreation=!!allow;
- persistDraft();updateSend();$('collaboration-dialog').close();draft.focus();
-};
 $('composer').onsubmit=async e=>{
- e.preventDefault();if(posting||!$('draft').value.trim()||!state?.project)return;
- const a=currentAgent(),text=$('draft').value,allow=!!(mayCreateAgent()&&allowAgentCreation);
- if(allow&&text.trimStart().startsWith('@')){notice('新增代理授權僅適用於直接送給領頭羊的訊息。請移除 @ 或在「協作」關閉授權。');return;}
+ e.preventDefault();
+ const files=currentAttachments(),text=$('draft').value;
+ if(posting||!state?.project||(!text.trim()&&!files.length))return;
+ const key=draftKey(),scope={...selection},agent=currentAgent(),csrf=state.csrfToken;
+ const pendingKey=key+':pending';
+ const fileKey=files.length?JSON.stringify(files.map(f=>[f.name,f.size,f.lastModified])):'';
+ let pending;
+ try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{}
+ if(!files.length&&pending?.text===text&&pending.fileKey){
+  notice('這則草稿原本有附件，請重新加入檔案後送出。');return;
+ }
+ if(!pending||pending.text!==text||(pending.fileKey||'')!==fileKey){
+  pending={text,id:crypto.randomUUID(),fileKey};
+ }
+ try{localStorage.setItem(pendingKey,JSON.stringify(pending));}catch{}
  posting=true;updateSend();renderReplyProgress();
- const pendingKey=draftKey()+':pending';let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{}
- if(!pending||pending.text!==text||!!pending.allowAgentCreation!==allow)pending={text,id:crypto.randomUUID(),allowAgentCreation:allow};try{localStorage.setItem(pendingKey,JSON.stringify(pending));}catch{}
- try{const delivered=await api('message',{text,id:pending.id,allowAgentCreation:allow,...(a?{agentId:a.id}:{})});try{localStorage.removeItem(pendingKey);}catch{}$('draft').value='';allowAgentCreation=false;persistDraft();if(delivered.direct&&delivered.target!==selectedAgent){selectedAgent=delivered.target;restoreDraft();}notice(delivered.status==='cancelled'?'這則訊息已取消。':delivered.status==='stopped'?'這則訊息已停止。':delivered.status==='sent'?'訊息已送達。':delivered.direct?'訊息已排隊，將直接送給 '+(state.agents.find(x=>x.id===delivered.target)?.name||'選定代理')+'。':'訊息已排隊，等待總控接收。');await refresh();}catch(error){notice(error.message);}finally{posting=false;updateSend();renderReplyProgress();}
+ try{
+  const attachments=files.length?await uploadFiles(scope,pending.id,files,csrf):undefined;
+  const delivered=await api('message',{text,id:pending.id,attachments,
+   allowAgentCreation:pending.allowAgentCreation,...(agent?{agentId:agent.id}:{})},scope);
+  try{localStorage.removeItem(pendingKey);localStorage.removeItem(key);}catch{}
+  attachmentsByDraft.delete(key);
+  if(draftKey()===key){
+   $('draft').value='';
+   if(delivered.direct&&delivered.target!==selectedAgent){selectedAgent=delivered.target;restoreDraft();}
+   const to=delivered.direct?(state.agents.find(x=>x.id===delivered.target)?.name||'選定代理'):(state.coordinatorName||'領頭羊');
+   notice(delivered.status==='cancelled'?'這則訊息已取消。':delivered.status==='stopped'?'這則訊息已停止。':
+    delivered.status==='sent'?'訊息已送達。':`訊息已排隊，等待 ${to} 接收。`);
+  }
+  await refresh();
+ }catch(error){notice(error.message);}
+ finally{posting=false;updateSend();renderReplyProgress();scheduleRefresh();}
 };
 $('search').oninput=renderNav;
 $('sidebar-toggle').onclick=()=>{if(matchMedia('(max-width:760px)').matches)document.body.classList.toggle('show-sidebar');else document.body.classList.toggle('hide-sidebar');};
@@ -417,7 +484,21 @@ $('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disa
 $('remove-agent').onclick=async()=>{try{await saveAgent(true);}catch(e){notice(e.message);}};
 $('new-chat').onclick=async()=>{if(posting||!state?.project)return;try{const next=await api('chat',{});await switchChat(next.project,next.chat);notice('已建立空白對話，尚未啟動代理。');}catch(e){notice(e.message);}};
 window.addEventListener('beforeunload',persistDraft);
-refresh();setInterval(()=>{if(!document.hidden&&!posting)refresh();},4000);
+let refreshTimer;
+function scheduleRefresh(){
+ clearTimeout(refreshTimer);
+ if(document.hidden)return;
+ const active=state?.appOpen&&['sending','queued','working','collaboration'].includes($('reply-progress').dataset.phase)&&
+  !$('reply-progress').hidden;
+ refreshTimer=setTimeout(async()=>{if(!posting)await refresh();scheduleRefresh();},active?1250:4000);
+}
+function refreshForeground(){
+ clearTimeout(refreshTimer);
+ if(!document.hidden&&!posting)refresh().finally(scheduleRefresh);
+}
+document.addEventListener('visibilitychange',refreshForeground);
+window.addEventListener('online',refreshForeground);
+refresh().finally(scheduleRefresh);
 
 $('new-project').onclick=()=>{renderCategoryOptions();$('project-name').value='';$('new-project-category').value='';$('project-dialog').showModal();};
 $('project-cancel').onclick=()=>$('project-dialog').close();

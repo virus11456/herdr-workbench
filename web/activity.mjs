@@ -20,8 +20,11 @@ export function replyProgress({messages=[],agentId=null,terminal,name='領頭羊
  if(replied&&!terminal?.waitingCollaboration&&terminal?.status?.state!=='working')return null;
  if(terminal?.status?.state==='blocked')return{phase:'blocked',text:`${name} 等待你確認權限`,animate:false};
  if(stopped||terminal?.status?.state==='error'||(terminal?.state==='finished'&&delivery))return{phase:'stopped',text:`${name} 已停止，訊息與對話仍保留`,animate:false};
- if(!delivery)return{phase:'queued',text:`等待 ${name} 接收`,animate:true};
+ if(!delivery){
+  const busy=terminal?.state==='live'&&terminal?.status?.state==='working';
+  return{phase:'queued',text:busy?`這則已排隊，${name} 正在處理前一則`:`等待 ${name} 接收`,animate:true};
+ }
  if(terminal?.waitingCollaboration)return{phase:'collaboration',text:`${name} 正在等協作回報`,animate:true};
  if(terminal?.status?.state==='working')return{phase:'working',text:`${name} 已收到，正在回覆`,animate:true};
- return{phase:'delivered',text:`已送達 ${name}，等待回覆`,animate:true};
+ return{phase:'unconfirmed',text:`已送達 ${name}，回覆未核對`,animate:false};
 }

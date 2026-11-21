@@ -1,7 +1,57 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {saveRoster,context} from '../team-runtime.mjs';
-import {createECDH,randomBytes} from 'node:crypto';
+import {createECDH,randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from './server.mjs';
+
+test('attachment upload stays inside the selected conversation and unchanged refreshes omit history',async t=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-attachment-test-')));
+ const home=path.join(root,'app'),folder=path.join(root,'project');
+ fs.mkdirSync(home);fs.mkdirSync(folder);
+ const chats=[{id:'one',title:'One'},{id:'two',title:'Two'}];
+ fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Fixture',chats}]}));
+ const c=context(folder,null,null,'one');
+ saveRoster(c,[{id:'engineer',name:'工程師',provider:'codex',level:'worker'}]);
+ const origin='https://unit.tail.test';
+ const server=createServer({allowedLogin:'owner@example.test',origin,appHome:home,core:()=>{throw Error('No actual agents');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port+'/herdr/api/';
+ const identity={'Tailscale-User-Login':'owner@example.test'};
+ const initial=await(await fetch(base+'state?chat=one',{headers:identity})).json();
+ const project=initial.project,id=randomUUID();
+ const writes={...identity,Origin:origin,'X-Herdr-CSRF':initial.csrfToken};
+ const upload=(content,extra={})=>fetch(base+'attachment?'+new URLSearchParams({project,chat:'one',id,slot:'0'}),{
+  method:'POST',headers:{...writes,'Content-Type':'application/octet-stream',
+   'X-Herdr-Filename':encodeURIComponent('核對 資料.txt'),...extra},body:content
+ });
+ const message=(chat,payload)=>fetch(base+'message',{method:'POST',headers:{...writes,'Content-Type':'application/json'},
+  body:JSON.stringify({project,chat,id,text:'請讀取',agentId:'engineer',...payload})});
+ assert.equal((await upload('answer = 42',{'X-Herdr-CSRF':'wrong'})).status,403);
+ assert.equal((await upload('answer = 42',{Origin:'https://other.test'})).status,403);
+ assert.equal((await message('one',{attachments:['核對_資料.txt']})).status,400);
+ const first=await upload('answer = 42');
+ assert.equal(first.status,201);const item=await first.json();
+ assert.deepEqual(item,{name:'核對_資料.txt',size:11});
+ assert.equal((await upload('answer = 42')).status,201);
+ assert.equal((await upload('answer = 99')).status,409);
+ assert.equal((await message('two',{attachments:[item.name]})).status,400);
+ const result=await(await message('one',{attachments:[item.name]})).json();
+ assert.equal(result.target,'engineer');assert.equal(result.queued,true);
+ const queued=JSON.parse(fs.readFileSync(path.join(c.teamDir,'direct-queue',id+'.json'),'utf8'));
+ const file=queued.text.match(/- `([^\n`]+)`/)?.[1];
+ assert(file?.startsWith('Herdr 附件/'));
+ assert.equal(fs.readFileSync(path.join(folder,file),'utf8'),'answer = 42');
+ assert.equal(queued.allowAgentCreation,'when-alone');
+ const query=new URLSearchParams({project,chat:'one'});
+ const state=await(await fetch(base+'state?'+query,{headers:identity})).json();
+ assert.equal(state.messages.length,1);
+ query.set('messagesRevision',state.messagesRevision);
+ const delta=await(await fetch(base+'state?'+query,{headers:identity})).json();
+ assert.equal(Object.hasOwn(delta,'messages'),false);
+ query.set('chat','two');
+ const other=await(await fetch(base+'state?'+query,{headers:identity})).json();
+ assert.deepEqual(other.messages,[]);
+});
 test('a kept login shell is parked rather than a connected or starting agent; permission prompts are not parked',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-parked-')),home=path.join(root,'app'),folder=path.join(root,'project');fs.mkdirSync(home);fs.mkdirSync(folder);fs.writeFileSync(path.join(home,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Parked fixture',chats:[{id:'unit-chat',title:'Unit chat'}]}]}));
  const c=context(folder,null,null,'unit-chat');fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tunitparked',phase:'active'}));let actual={address:'tunitparked',state:'live',foreground:{argv:['/bin/zsh','-l']},status:null};
