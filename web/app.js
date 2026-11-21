@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-quota36';
+const UI_BUILD='20261121-project37';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -126,7 +126,12 @@ function renderNav(){
  for(const [category,projects] of groups){const group=el('div','project-category-group');
  for(const project of projects){const members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
   const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id);
-  caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};group.append(caption);if(project.id!==selection.project){
+  caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};
+  const titleRow=el('div','project-title-row');
+  const edit=el('button','project-edit','✎');edit.type='button';edit.dataset.editProject=project.id;edit.disabled=project.available===false;
+  edit.setAttribute('aria-label','編輯專案：'+project.name);edit.setAttribute('aria-haspopup','dialog');edit.title='編輯專案';
+  edit.onclick=()=>openProjectEditor(project.id);
+  titleRow.append(caption,edit);group.append(titleRow);if(project.id!==selection.project){
    const preview=[...(!project.agentWorkspace?[{id:null,name:project.coordinatorName||'領頭羊',provider:'claude'}]:[]),...members];
    const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name),el('span','member-sub',providerName(a.provider)+' · 切換查看狀態'));b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,project.chats.at(-1)?.id,a.id);group.append(b);}continue;
   }
@@ -393,29 +398,75 @@ $('new-chat').onclick=async()=>{if(posting||!state?.project)return;try{const nex
 window.addEventListener('beforeunload',persistDraft);
 refresh();setInterval(()=>{if(!document.hidden&&!posting)refresh();},4000);
 
-$('new-project').onclick=()=>{renderProjectCategory();$('project-name').value='';$('new-project-category').value='';$('project-dialog').showModal();};
+$('new-project').onclick=()=>{renderCategoryOptions();$('project-name').value='';$('new-project-category').value='';$('project-dialog').showModal();};
 $('project-cancel').onclick=()=>$('project-dialog').close();
 $('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await api('project',{name:$('project-name').value.trim(),category:$('new-project-category').value});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){notice(error.message);}finally{button.disabled=false;}};
 
 $('hero-sheep').append(avatar('claude'));
 $('search-toggle').onclick=()=>{const show=$('search-wrap').hidden;$('search-wrap').hidden=!show;if(show)$('search').focus();else{$('search').value='';renderNav();}};
 $('quick-new-chat').onclick=()=>$('new-chat').click();
-function renderProjectCategory(){
- const project=state?.projects.find(p=>p.id===selection.project);
- $('project-category-form').hidden=!project;
- $('project-category').value=project?.category||'';
- $('remove-project-category').hidden=!project?.category;
+function renderCategoryOptions(){
  const options=[...new Set((state?.projects||[]).map(p=>p.category).filter(Boolean))];
  $('project-category-options').replaceChildren(...options.map(name=>{const option=el('option');option.value=name;return option;}));
 }
-async function changeCategory(action,category){
- try{await api('project-category',{action,category});await refresh();renderProjectCategory();$('project-category-result').textContent=action==='remove'?'分類已刪除，專案已移至未分類。':'分類已保存。';}
- catch(error){$('project-category-result').textContent=error.message;}
+const projectEditor=$('project-edit-dialog');
+function openProjectEditor(projectId){
+ const project=state?.projects.find(p=>p.id===projectId);
+ if(!project||project.available===false)return;
+ projectEditor.dataset.project=projectId;
+ projectEditor.dataset.category=project.category||'';
+ renderCategoryOptions();
+ $('project-rename').value=project.name;
+ $('project-category').value=project.category||'';
+ $('remove-project-category').hidden=!project.category;
+ $('project-rename-result').textContent='';
+ $('project-category-result').textContent='';
+ projectEditor.showModal();
 }
-$('project-category-form').onsubmit=e=>{e.preventDefault();changeCategory('set',$('project-category').value);};
+$('project-edit-close').onclick=()=>projectEditor.close();
+projectEditor.addEventListener('close',()=>{
+ const project=$('members').querySelector('[data-edit-project="'+CSS.escape(projectEditor.dataset.project)+'"]');
+ if(project?.getClientRects().length)project.focus();
+});
+async function saveProjectEdit(route,data,resultId){
+ if(projectEditor.dataset.saving)return;
+ const project=projectEditor.dataset.project;
+ projectEditor.dataset.saving='true';
+ const actions=projectEditor.querySelectorAll('form button');
+ actions.forEach(button=>{button.disabled=true;});
+ const result=$(resultId);
+ result.textContent='';
+ try{
+  const saved=await api(route,{project,chat:null,...data});
+  await refresh();
+  if(!projectEditor.open||projectEditor.dataset.project!==project)return;
+  if(route==='project-name'){
+   result.textContent='專案名稱已保存。';
+  }else{
+   projectEditor.dataset.category=saved.category;
+   $('project-category').value=saved.category;
+   $('remove-project-category').hidden=!saved.category;
+   renderCategoryOptions();
+   result.textContent=data.action==='remove'?'分類已刪除，專案已移至未分類。':'分類已保存。';
+  }
+ }catch(error){
+  if(projectEditor.open&&projectEditor.dataset.project===project)result.textContent=error.message;
+ }finally{
+  delete projectEditor.dataset.saving;
+  actions.forEach(button=>{button.disabled=false;});
+ }
+}
+$('project-rename-form').onsubmit=e=>{
+ e.preventDefault();saveProjectEdit('project-name',{name:$('project-rename').value.trim()},'project-rename-result');
+};
+$('project-category-form').onsubmit=e=>{
+ e.preventDefault();saveProjectEdit('project-category',{action:'set',category:$('project-category').value},'project-category-result');
+};
 $('remove-project-category').onclick=()=>{
- const category=state?.projects.find(p=>p.id===selection.project)?.category;
- if(category&&confirm('刪除「'+category+'」分類？此分類的所有專案都會移至未分類。'))changeCategory('remove',category);
+ const category=projectEditor.dataset.category;
+ if(category&&confirm('刪除「'+category+'」分類？此分類的所有專案都會移至未分類。')){
+  saveProjectEdit('project-category',{action:'remove',category},'project-category-result');
+ }
 };
 let memoryRevision=0;
 const usageNumber=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:2});
@@ -477,7 +528,6 @@ $('project-memory-form').onsubmit=async event=>{
  finally{button.disabled=false;}
 };
 function openTeam(){
- renderProjectCategory();
  renderUsage();
  $('maintenance-section').hidden=!state?.project;
  $('maintenance-issue').value='';$('maintenance-result').textContent='';
@@ -485,20 +535,16 @@ function openTeam(){
  const memory=state?.projectMemory;
  memoryRevision=memory?.revision||0;
  $('project-memory').value=memory?.text||'';
- $('project-memory-result').textContent='';$('project-category-result').textContent=''; $('project-rename').value=state?.projects.find(p=>p.id===selection.project)?.name||'';
+ $('project-memory-result').textContent='';
  const drive=state?.drive;
  $('storage-status').textContent=drive?.status==='configured'?'Google Drive 資料夾已設定；雲端上傳狀態由 Drive 桌面版確認。':drive?.status==='needs_login'?'Google Drive 需要重新登入，原檔已保留。':'Google Drive 未連線：請先在主機完成官方桌面版登入。';
  $('storage-folder').value=drive?.folder||'';
  $('storage-form').hidden=state?.backendMode!=='background';
 
- const p=state?.projects.find(p=>p.id===selection.project);$('team-project-name').textContent=p?.name||'請先建立專案';
- const list=$('team-member-list');list.replaceChildren();
- if(!state?.agentWorkspace){const director=el('div','team-row');director.append(avatar('claude'),el('span','',state?.coordinatorName||'領頭羊'));const rename=el('button','','改名');rename.onclick=()=>{$('team-dialog').close();editAgent({id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});};list.append(director);}
- for(const a of state?.agents||[]){const row=el('div','team-row');row.append(avatar(a.provider),el('span','',a.name));const b=el('button','','設定');b.onclick=()=>{$('team-dialog').close();editAgent(a);};list.append(row);}
- $('team-add').disabled=!p;$('team-history').disabled=!p;$('team-dialog').showModal();
+ $('team-history').disabled=!state?.project;
+ $('team-dialog').showModal();
 }
 $('team-close').onclick=()=>$('team-dialog').close();
-$('team-add').onclick=()=>{$('team-dialog').close();editAgent();};
 $('team-history').onclick=()=>{$('team-dialog').close();historyVisible=true;render();};
 
 $('sidebar-add-agent').onclick=()=>editAgent();
@@ -542,8 +588,6 @@ $('copy-layout').onclick=async()=>{
 $('copy-chat-link').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);notice('已複製目前專案與對話連結；在另一台同 Tailnet 裝置開啟即可。');}catch{notice('請複製目前網址，連結已包含專案與對話位置。');}};
 
 $('retry-start').onclick=async()=>{const button=$('retry-start');button.disabled=true;try{await api(currentAgent()?'retry-agent':'retry-start',currentAgent()?{agentId:currentAgent().id}:{});notice('已請求重新開啟；登入、信任與權限仍需你親自確認。');await refresh();}catch(error){notice(error.message);}finally{button.disabled=false;}};
-
-$('project-rename-form').onsubmit=async e=>{e.preventDefault();try{await api('project-name',{name:$('project-rename').value.trim()});await refresh();$('team-project-name').textContent=$('project-rename').value.trim();notice('專案名稱已保存。');}catch(error){notice(error.message);}};
 
 $('agent-provider').onchange=()=>{
  const provider=$('agent-provider').value;

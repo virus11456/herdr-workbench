@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.7-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.7-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.7-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.8-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.8-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.8-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -139,7 +139,7 @@ npm test
 
 ![聊天與任務進度，教學測試資料](docs/images/15-chat-tasks-demo.png)
 
-新增代理時只填名稱、選引擎；模型、職責標籤和工作說明可之後從代理的「⋯ → 設定」調整。專案可選填分類，空白顯示「未分類」；在「設定」刪除分類會把其中的專案移回「未分類」。
+新增代理時只填名稱、選引擎；模型、職責標籤和工作說明可之後從代理的「⋯ → 設定」調整。點側欄專案右側的編輯按鈕，可改名或調整分類。清空分類會將該專案移至「未分類」；刪除整個分類會將同分類的所有專案移至「未分類」。
 
 展開任務卡可取消尚未送出的聊天訊息。已送達的直接聊天可在 Core 確認仍是同一個執行回合時停止。Core 回報中斷且終端離開執行狀態後才顯示「已停止」。已寫入的檔案會保留。舊總控或代理間協作的執行中回合目前由主機終端處理。
 
