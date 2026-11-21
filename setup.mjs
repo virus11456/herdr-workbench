@@ -26,6 +26,7 @@ export function deploymentPlan(input,tools){
  const cloud=path.join(os.homedir(),'Library/CloudStorage');if(path.resolve(home).startsWith(cloud+path.sep))throw Error('執行控制資料不得存進雲端同步資料夾。');
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
  const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
+ if(tools.mmx)config.miniMaxQuotaCli=tools.mmx;
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
  for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
@@ -98,7 +99,8 @@ async function main(){
   input.projects=mergeProjects(groups);input.legacyProjects=[...new Set([...(previous?.legacyProjects||[]),...groups.slice(1).flatMap(list=>list.map(p=>fs.realpathSync(p.folder)))])];
  }
  const tools={node:process.execPath,...Object.fromEntries(['hc','claude','codex','mcode','agy'].map(name=>[name,findTool(name)]))};
- const plan=deploymentPlan(input,tools);console.log(JSON.stringify({mode:'background',dependencies:{command:'npm ci --omit=dev --ignore-scripts --no-audit --no-fund',lockfile:'package-lock.json',installScripts:false},files:plan.files.map(f=>f.target),links:plan.links,projects:input.projects?.length||0,drive:plan.config.driveRoot?'configured':'needs_login',launchAgents:plan.agents.map(a=>a.label)},null,2));
+ try{tools.mmx=findTool('mmx');}catch{}
+ const plan=deploymentPlan(input,tools);console.log(JSON.stringify({mode:'background',dependencies:{command:'npm ci --omit=dev --ignore-scripts --no-audit --no-fund',lockfile:'package-lock.json',installScripts:false},files:plan.files.map(f=>f.target),links:plan.links,projects:input.projects?.length||0,drive:plan.config.driveRoot?'configured':'needs_login',miniMaxQuota:!!plan.config.miniMaxQuotaCli,launchAgents:plan.agents.map(a=>a.label)},null,2));
  if(flags.has('--dry-run')){console.log('Dry run：未寫入檔案、未啟動代理、未修改 Tailscale。');return;}
  if(flags.has('--confirm')){if(!process.stdin.isTTY)throw Error('請在主機互動式終端確認安裝。');const ui=createInterface({input:process.stdin,output:process.stdout});let answer;try{answer=await ui.question('依上列範圍備份並安裝？[y/N] ');}finally{ui.close();}if(!/^[yY]$/.test(answer.trim())){console.log('已取消，未安裝。');return;}}
  const backup=applyDeployment(plan);console.log('備份：'+backup);

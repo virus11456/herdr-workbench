@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.5-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.5-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.5-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.6-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.6-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.6-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -164,7 +164,9 @@ npm test
 | Claude | 官方 CLI 狀態列提供已用的 5 小時／每週額度，工作台換算成剩餘比例。CLI 會在該會話收到 API 回應後提供可用週期。 [Claude Code 狀態列](https://code.claude.com/docs/en/statusline) |
 | Google Antigravity | 官方 CLI 狀態列提供各模型群組的剩餘比例。主機收到新回報後，各專案共用最近的帳號快照。 [Antigravity 狀態列](https://antigravity.google/docs/cli/statusline/) |
 | Codex | 依本對話最近收到的 CLI 額度快照換算剩餘比例。 [Codex CLI 原始碼](https://github.com/openai/codex) |
-| MiniMax | 可從官方的 M Plan 用量頁或 `mmx quota show` 查詢。MiniMax Code 的現有登入不會同步給 `mmx`，目前工作台只顯示真實回合的 token。 [MiniMax M Plan](https://www.minimax.io/m-plan) · [MiniMax 官方 CLI](https://github.com/MiniMax-AI/cli) |
+| MiniMax | 官方 `mmx quota show --output json` 直接提供各類別、各週期的剩餘比例。使用工作台時最多每 5 分鐘查一次；15 分鐘沒有可用回報時暫時隱藏。 [MiniMax M Plan](https://www.minimax.io/m-plan) · [MiniMax 官方 CLI](https://github.com/MiniMax-AI/cli) |
+
+啟用 MiniMax 額度時，從 [MiniMax 官方 CLI](https://github.com/MiniMax-AI/cli) 安裝 `mmx`（已驗證 `mmx-cli@1.0.29`）。在主機終端執行 `mmx auth login`，用與 MiniMax Code 相同的帳號和區域親自完成 OAuth，再執行 `node setup.mjs --dry-run` 確認 `miniMaxQuota` 為 `true`，最後執行 `node setup.mjs`。之後開啟 Herdr 設定即可查看。工作台透過官方 CLI 使用登入，不讀取或保存憑證。未安裝 `mmx` 的主機仍可使用 MiniMax 聊天與 token 統計。
 
 Claude 與 Antigravity 在新版啟動器開啟的會話收集額度，原先已開啟的會話可繼續使用，待下次啟動新版會話後開始回報。工作台保留既有自訂狀態列命令，並只在主機私有資料夾保存額度數字與時間。現有來源沒有可對應回合的實付費用，金額欄位不顯示。
 

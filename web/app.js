@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261121-quota34';
+const UI_BUILD='20261121-quota35';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
 const modelNames={'claude-opus-5-5':'Opus 5.5','claude-fable-5-2':'Fable 5.2'};
@@ -423,6 +423,7 @@ let usageSnapshot='';
 const quotaDate=seconds=>new Date(seconds*1000).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const quotaPeriod=minutes=>minutes%1440===0?minutes/1440+' 天':minutes%60===0?minutes/60+' 小時':minutes+' 分鐘';
 const quotaBucket={'gemini-weekly':'Gemini 每週','3p-weekly':'第三方模型每週'};
+const miniMaxBucket={general:'通用',video:'影片'};
 function renderUsage(){
  const list=$('conversation-usage'),quotaList=$('account-quotas'),usage=state?.usage||[];
  const codex=usage.find(row=>row.provider==='codex')?.quota;
@@ -435,7 +436,9 @@ function renderUsage(){
   const group=el('dl');
   group.append(el('dt','',providers[provider]));
   for(const w of windows){
-   const period=w.bucket?(Object.hasOwn(quotaBucket,w.bucket)?quotaBucket[w.bucket]:w.bucket):quotaPeriod(w.windowMinutes);
+   const labels=provider==='minimax'?miniMaxBucket:quotaBucket;
+   const bucket=w.bucket&&(Object.hasOwn(labels,w.bucket)?labels[w.bucket]:w.bucket);
+   const period=[bucket,w.windowMinutes&&quotaPeriod(w.windowMinutes)].filter(Boolean).join(' · ');
    const remaining=w.remainingPercent??100-w.usedPercent;
    group.append(el('dd','',period+' · 剩餘 '+usageNumber.format(remaining)+'% · '+quotaDate(w.resetsAt)+' 重設'));
   }

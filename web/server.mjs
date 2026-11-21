@@ -1,6 +1,6 @@
 import {conversationUsage} from './usage.mjs';
 import {providerUsageRecords} from '../provider-usage.mjs';
-import {readQuotas} from '../provider-quota.mjs';
+import {miniMaxQuotaRefresher,readQuotas} from '../provider-quota.mjs';
 import {projectMemory,saveProjectMemory} from '../project-memory.mjs';
 import {createPushStore} from './push.mjs';
 import {artifactReferences,driveArtifactLink,readArtifact} from './artifacts.mjs';
@@ -22,7 +22,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261121-quota34',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261121-quota35',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -72,8 +72,10 @@ export function createServer(config) {
   };
   const publicArtifacts=task=>artifactReferences(task).map(({index,name,kind})=>({index,name,kind}));
   const push=createPushStore({home,origin:config.origin,send:config.pushSend});
+  const refreshMiniMax=miniMaxQuotaRefresher(home,config.headless?config.miniMaxQuotaCli:null);
   const state=async url=>{
-    const accountQuotas=config.headless?readQuotas(home):[];
+    refreshMiniMax();
+    const accountQuotas=config.headless?readQuotas(home).filter(q=>q.provider!=='minimax'||config.miniMaxQuotaCli):[];
     const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,category:p.category,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
     if(!list.length)return {...release,accountQuotas,projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));

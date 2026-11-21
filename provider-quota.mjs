@@ -2,8 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {spawnSync} from 'node:child_process';
+import {execFile,spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
+import {promisify} from 'node:util';
+
+const exec=promisify(execFile);
+const miniMaxRefreshMs=5*60_000;
 
 const statusSources={
  claude:'.claude/settings.json',
@@ -43,6 +47,21 @@ export function quotaFromStatus(provider,payload,now=Date.now()){
    return [{bucket,remainingPercent:entry.remaining_fraction*100,resetsAt:Math.floor(Date.parse(entry.reset_time)/1000)}];
   });
  }
+ if(provider==='minimax'&&payload?.base_resp?.status_code===0&&Array.isArray(payload.model_remains)){
+  const fields=[
+   ['start_time','end_time','current_interval_remaining_percent'],
+   ['weekly_start_time','weekly_end_time','current_weekly_remaining_percent']
+  ];
+  windows=payload.model_remains.slice(0,16).flatMap(entry=>{
+   if(!validBucket(entry?.model_name))return [];
+   return fields.flatMap(([startKey,endKey,percentKey])=>{
+    const start=entry[startKey],end=entry[endKey];
+    if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<=0||start>now)return [];
+    return [{bucket:entry.model_name,windowMinutes:Math.round((end-start)/60_000),
+     remainingPercent:entry[percentKey],resetsAt:Math.floor(end/1000)}];
+   }).filter(w=>w.windowMinutes>0);
+  });
+ }
  windows=activeWindows(windows,now);
  return windows.length?{observedAt:new Date(now).toISOString(),windows}:null;
 }
@@ -60,12 +79,37 @@ export function saveQuota(home,provider,payload,now=Date.now()){
  return sample;
 }
 
+// Share one rate-limited lookup across authenticated clients of this Workbench.
+export function miniMaxQuotaRefresher(home,cli,run=exec,clock=Date.now){
+ let nextRefresh=0,inFlight;
+ return ()=>{
+  if(!cli)return;
+  if(inFlight)return inFlight;
+  const now=clock();
+  if(now<nextRefresh)return;
+  nextRefresh=now+miniMaxRefreshMs;
+  inFlight=(async()=>{
+   try{
+    const {stdout}=await run(cli,['quota','show','--output','json'],{
+     cwd:home,env:{HOME:os.homedir(),PATH:process.env.PATH},
+     timeout:8_000,maxBuffer:128*1024
+    });
+    saveQuota(home,'minimax',JSON.parse(stdout),clock());
+   }catch{
+    // CLI failures may contain local paths or account details.
+   }
+  })().finally(()=>{inFlight=undefined;});
+  return inFlight;
+ };
+}
+
 export function readQuotas(home,now=Date.now()){
- return Object.keys(statusSources).flatMap(provider=>{
+ return [...Object.keys(statusSources),'minimax'].flatMap(provider=>{
   try{
    const data=JSON.parse(fs.readFileSync(path.join(home,'provider-quota',provider+'.json'),'utf8'));
    const observed=Date.parse(data?.observedAt);
    if(!Number.isFinite(observed)||observed>now||!Array.isArray(data.windows))return [];
+   if(provider==='minimax'&&now-observed>=3*miniMaxRefreshMs)return [];
    const windows=activeWindows(data.windows.slice(0,32),now).map(({bucket,windowMinutes,remainingPercent,resetsAt})=>({bucket,windowMinutes,remainingPercent,resetsAt}));
    return windows.length?[{provider,observedAt:data.observedAt,windows}]:[];
   }catch{return [];}
