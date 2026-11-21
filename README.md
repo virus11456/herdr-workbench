@@ -4,7 +4,7 @@
 
 牧羊人的 AI 工作台。新專案先有一隻「領頭羊」，不能刪除，可改名與設定模型；其他 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理由你加入。點誰就直接和誰聊天；你在某位代理的對話中指定合作對象，它就能交付工作、收取回報、驗收及要求修正，不必每句話經過固定總控。協調者仍由你任命。
 
-目前版本：**0.8.8-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.8-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.8-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
+目前版本：**0.8.9-dev**。可下載 [完整安裝包](downloads/herdr-workbench-0.8.9-dev.zip) 與 [SHA-256](downloads/herdr-workbench-0.8.9-dev.zip.sha256)，解壓後開啟 `Install.command`。這是需要官方 CLI 依賴的原始碼安裝包，並非已簽章 DMG；新機驗證狀態見 [VALIDATION.md](VALIDATION.md)。私人倉庫仍需自己的 GitHub 讀取權。
 
 這是獨立倉庫，衍生自 [Herdr 的 team-work 擴充](https://github.com/virus11456/herdr/tree/master/extensions/team-work)。授權與來源見 [LICENSE](LICENSE)、[NOTICE](NOTICE)。
 
@@ -103,6 +103,8 @@ tailscale serve --bg --set-path=/herdr http://127.0.0.1:48724
 
 綠燈表示 CLI 已連線且可用，待命恆亮、工作閃爍；未啟動、未連線、已結束、shell 或等待登入／權限時為灰燈。已在同一台 Mac 第二次真正重開機確認，登入後 Tailscale 與兩個背景服務自行恢復，不需手動 Connect 或開 Herdr；專案與對話保留。模型 CLI 在訊息到達時續接，細節與新機限制見 [驗證結果](VALIDATION.md)。
 
+側欄將模型和狀態分開顯示。已連線的代理顯示目前確認的模型，沒有啟動的代理保留該專案的上次模型；對尚無回報的代理顯示已選的下次模型或引擎。
+
 側欄可用滑鼠拖曳排序，Pin 的代理固定在上方；亦可從「⋯」向上／向下移動。拖到另一個專案名稱，或選「移至其他專案」，會先顯示目的專案與保留範圍。轉移／刪除前核對所有對話的排隊訊息與未完成協作，保留原對話及檔案；預設領頭羊不能刪除或移出，現任協調者需先完成交接。[新版側欄教學](docs/USAGE.md#側欄拖曳與代理選單)。
 
 Chrome 可安裝 PWA；iPhone / iPad Safari 用「分享 → 加入主畫面」。圖示為 SVG 綿羊。離線僅保留介面外殼，不快取對話、憑證、API 回應或排入任務。
@@ -183,6 +185,8 @@ Claude 與 Antigravity 在新版啟動器開啟的會話收集額度，原先已
 5. 「關閉此裝置通知」移除此裝置在主機登記的全部對話通知，並取消瀏覽器訂閱；其他裝置保留。
 
 通知採 Web Push，可在 PWA 關閉時由裝置服務接收，仍受系統通知設定、網路與省電機制影響。主機每 15 秒檢查已訂閱對話的真實 blocked 狀態，同一等待事件只提醒一次；解除後再次等待才重新提醒。通知只顯示通用確認文字，不傳送對話內容、任務名稱或登入資料。加密推播經裝置的 Apple／Google／Mozilla／Microsoft 服務傳送；私人介面仍維持 loopback＋Tailscale，沒有開啟 Funnel。
+
+已在一台 iPhone 實測，從應用程式切換器完全滑掉 Herdr 後，主機發送的測試通知仍可送達。此驗收只確認該裝置和測試通知。
 
 VAPID 私鑰與裝置訂閱只保存在主機本機 `notifications/`，不在 Drive、GitHub 或安裝包內。安裝器使用鎖定版本的 `npm ci --omit=dev --ignore-scripts` 安裝 web-push 依賴；需要 Node.js 隨附的 npm 及網路。沒有預設替使用者開啟通知。
 

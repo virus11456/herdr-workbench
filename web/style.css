@@ -157,3 +157,5 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 #allow-agent-creation-label small{display:block;color:var(--muted);margin-top:4px}
 
 #workbench-version{margin:4px 0 12px;font-variant-numeric:tabular-nums}
+
+.member-model{display:block;font-size:12px;color:var(--fg);line-height:1.35;overflow-wrap:anywhere}.member-copy>.member-sub{display:block;line-height:1.35}.member-copy{min-width:0}

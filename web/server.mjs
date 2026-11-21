@@ -1,4 +1,5 @@
 import {conversationUsage} from './usage.mjs';
+import {footerModel,mergeModel,terminalProvider,validModel} from './agent-models.mjs';
 import {providerUsageRecords} from '../provider-usage.mjs';
 import {codexQuotaRefresher,miniMaxQuotaRefresher,readQuotas} from '../provider-quota.mjs';
 import {projectMemory,saveProjectMemory} from '../project-memory.mjs';
@@ -22,7 +23,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261121-project37',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261121-model38',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -75,9 +76,59 @@ export function createServer(config) {
   const quotaClis=config.headless?{codex:config.codexQuotaCli,minimax:config.miniMaxQuotaCli}:{};
   const refreshCodex=codexQuotaRefresher(home,quotaClis.codex);
   const refreshMiniMax=miniMaxQuotaRefresher(home,quotaClis.minimax);
+  const modelFile=p=>path.join(home,'agent-models',p.id+'.json');
+  const modelCache=new Map(),historicModels=new Map();
+  async function readFooter(t,provider){
+    const key=t.address+':'+t.cwd+':'+provider;
+    const previous=modelCache.get(key),now=Date.now();
+    if(previous?.until>now)return previous.pending;
+    const pending=core(['read',t.address,'--json','--lines','0'])
+      .then(r=>footerModel(provider,r.text)).catch(()=>null);
+    modelCache.set(key,{until:now+20_000,pending});
+    if(modelCache.size>128)modelCache.delete(modelCache.keys().next().value);
+    return pending;
+  }
+  function previousModels(p,agents,provider){
+    const active=new Map(agents.map(a=>[a.id,a.provider]));
+    let saved={};try{saved=read(modelFile(p),{});}catch{}
+    active.set('__coordinator__',provider);
+    let history=historicModels.get(p.id);
+    if(!history){
+      history={};
+      for(const chat of p.chats){
+        try{
+          const scope=ctx(p.folder,null,undefined,chat.id==='legacy'?null:chat.id);
+          const bindings=read(path.join(scope.teamDir,'direct-bindings.json'),{});
+          for(const b of Object.values(bindings)){
+            if(b.chat===chat.id&&active.get(b.agentId)===b.provider){
+              mergeModel(history,b.agentId,b.provider,b.model,b.lastSentAt||b.createdAt);
+            }
+          }
+        }catch{}
+      }
+      historicModels.set(p.id,history);
+    }
+    return Object.fromEntries([...active].flatMap(([id,engine])=>{
+      const candidate=[history[id],saved[id]].filter(x=>x?.provider===engine&&validModel(x.model)).sort((a,b)=>b.at-a.at)[0];
+      return candidate?[[id,candidate]]:[];
+    }));
+  }
   const state=async url=>{
     const accountQuotas=config.headless?readQuotas(home).filter(q=>!Object.hasOwn(quotaClis,q.provider)||quotaClis[q.provider]):[];
-    const list=projects();const summary=list.map(p=>{let profile={name:'領頭羊'},agents=[],available=true,sidebar=null;try{const c=ctx(p.folder,null);profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);}catch{available=false;}return{id:p.id,name:p.name,category:p.category,coordinatorName:profile.name,coordinatorAgentId:profile.agentId||null,agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,available,chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};});
+    const list=projects();const summary=list.map(p=>{
+      let profile={name:'領頭羊'},agents=[],available=true,sidebar=null,lastModels={},preferredModel=null;
+      try{
+        const lastChat=p.chats.at(-1)?.id;
+        const c=ctx(p.folder,null),last=lastChat&&lastChat!=='legacy'?ctx(p.folder,null,undefined,lastChat):c;
+        profile=coordinatorProfile(c);agents=roster(c);sidebar=sidebarState(c,!!p.agentWorkspace);
+        lastModels=previousModels(p,agents,profile.provider||'claude');
+        preferredModel=selectedModel(last);
+      }catch{available=false;}
+      return {id:p.id,name:p.name,category:p.category,coordinatorName:profile.name,coordinatorProvider:profile.provider||'claude',
+        coordinatorPreferredModel:preferredModel,coordinatorAgentId:profile.agentId||null,
+        agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,lastModels,available,
+        chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt}))};
+    });
     if(!list.length)return {...release,accountQuotas,projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'));
     const picked=summary.find(p=>p.id===choice.p.id);
@@ -103,10 +154,50 @@ export function createServer(config) {
     const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c),profile=coordinatorProfile(c);
     const name=id=>members.find(a=>a.id===id)?.name||id||profile.name;
     taskList.items.push(...jobs.map(j=>({id:j.id,title:name(j.sourceAgent)+' → '+(j.newAgent?.name||name(j.targetAgent)),owner:name(j.sourceAgent),acceptance:j.acceptance,status:({done:'done',queued:'pending',provisioning:'pending',failed:'blocked'})[j.status]||'in_progress',verification:j.verification,evidence:j.evidence||[]})));
-    const ownerModel=read(path.join(c.teamDir,'model.json')),ownerArgs=owner?.foreground?.argv||owner?.argv||[],modelAt=ownerArgs.indexOf('--model');
+    const ownerModel=read(path.join(c.teamDir,'model.json'));
+    const ownerArgs=owner?.foreground?.argv||owner?.argv||[];
     const coordinatorParked=owner?.state==='live'&&!owner.status?.app&&control?.phase==='active'&&/(?:^|\/)(?:zsh|bash|sh|fish|nu)$/.test(ownerArgs[0]||'')&&!ownerArgs.includes('-c');
-    return {...release,accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:ownerModel?.terminal===owner?.address&&ownerModel?.confirmedAt?ownerModel.model:modelAt>=0?ownerArgs[modelAt+1]:null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
-      terminals:terminals.map(t=>{const agentId=t.labels?.['team.agent']||null,confirmed=read(path.join(c.teamDir,'agent-models.json'),{})[agentId],argv=t.foreground?.argv||t.argv||[],at=argv.indexOf('--model');return{address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&!['done','failed'].includes(j.status)),direct:t.labels?.['team.direct']==='true',provider:direct[t.address]?.provider||({'claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||null,model:confirmed?.terminal===t.address?confirmed.model:direct[t.address]?.model||(at>=0?argv[at+1]:null)};}),coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    const confirmedModels=read(path.join(c.teamDir,'agent-models.json'),{});
+    const workerBindings=read(path.join(c.teamDir,'worker-bindings.json'),{});
+    const memberProviders=new Map(members.map(a=>[a.id,a.provider]));
+    const terminalViews=await Promise.all(terminals.map(async t=>{
+      const agentId=t.labels?.['team.agent']||null,binding=direct[t.address];
+      const provider=terminalProvider(t)||binding?.provider||null;
+      const observed=(t===owner?ownerModel:confirmedModels[agentId]);
+      const args=t.foreground?.argv||t.argv||[],at=args.indexOf('--model');
+      const directTerm=t.labels?.['team.direct']==='true';
+      const worker=workerBindings[t.address];
+      const own=t===owner&&!t.parent&&!directTerm&&control.role===provider;
+      const directAgent=directTerm&&!t.parent&&binding?.provider===provider;
+      const scopedWorker=!directTerm&&t.parent&&t.parent===owner?.address&&worker?.owner===t.parent&&worker.chat===chat&&
+        t.labels?.['team.owner']===t.parent&&t.labels?.['team.chat']===chat&&memberProviders.get(agentId)===provider;
+      const verified=t.state==='live'&&t.cwd===c.cwd&&terminalProvider(t)&&(own||directAgent||scopedWorker);
+      const ready=verified&&['idle','done'].includes(t.status?.state);
+      const configured=at>=0?args[at+1]:null;
+      const stored=observed?.terminal===t.address&&observed.confirmedAt?observed.model:binding?.model||configured;
+      const footer=ready&&provider!=='claude'?await readFooter(t,provider):null;
+      const model=validModel(footer)?footer:validModel(stored)?stored:null;
+      return {address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,
+        agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&!['done','failed'].includes(j.status)),
+        direct:directTerm,provider,model,modelObserved:!!(verified&&model)};
+    }));
+    const known=picked.lastModels;
+    let changed=false;
+    for(const t of terminalViews){
+      if(!t.modelObserved||!['idle','done','working'].includes(t.status?.state))continue;
+      const id=t.address===owner?.address?'__coordinator__':t.agentId;
+      if(id&&(known[id]?.provider!==t.provider||known[id]?.model!==t.model)){
+        changed=mergeModel(known,id,t.provider,t.model,Date.now())||changed;
+      }
+    }
+    if(changed)try{
+      const current=read(modelFile(p),{});
+      for(const [id,v] of Object.entries(known))mergeModel(current,id,v.provider,v.model,v.at);
+      write(modelFile(p),current);
+    }catch{}
+    const coordinatorView=terminalViews.find(t=>t.address===owner?.address);
+    return {...release,accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+      terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   const server=http.createServer(async(req,res)=>{
