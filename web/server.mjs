@@ -27,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-chat50',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-collab51',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -251,6 +251,15 @@ export function createServer(config) {
     const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c),profile=coordinatorProfile(c);
     const name=id=>members.find(a=>a.id===id)?.name||id||profile.name;
     taskList.items.push(...jobs.map(j=>({id:j.id,title:name(j.sourceAgent)+' → '+(j.newAgent?.name||name(j.targetAgent)),owner:name(j.sourceAgent),acceptance:j.acceptance,status:({done:'done',queued:'pending',provisioning:'pending',failed:'blocked'})[j.status]||'in_progress',verification:j.verification,evidence:j.evidence||[]})));
+    const publicJob=(j,bindings,sourceChat)=>({id:j.id,sourceChat,createdAt:j.createdAt,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,targetTerminal:j.targetTerminal,deliveryConfirmed:!!(bindings[j.targetTerminal]?.activeJob===j.id&&bindings[j.targetTerminal]?.delivered),task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)});
+    const projectJobs=p.chats.flatMap(entry=>{
+      const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);
+      const bindings=entry.id===chat?direct:read(path.join(scope.teamDir,'direct-bindings.json'),{});
+      const scopedJobs=entry.id===chat?jobs:Object.values(read(path.join(scope.teamDir,'collaborations.json'),{}));
+      return scopedJobs.map(j=>publicJob(j,bindings,entry.id));
+    }).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    const recentDone=new Set(projectJobs.filter(j=>j.status==='done').slice(-20));
+    const projectCollaborations=projectJobs.filter(j=>j.status!=='done'||recentDone.has(j));
     const ownerModel=read(path.join(c.teamDir,'model.json'));
     const ownerArgs=owner?.foreground?.argv||owner?.argv||[];
     const coordinatorParked=owner?.state==='live'&&!owner.status?.app&&control?.phase==='active'&&/(?:^|\/)(?:zsh|bash|sh|fish|nu)$/.test(ownerArgs[0]||'')&&!ownerArgs.includes('-c');
@@ -293,7 +302,7 @@ export function createServer(config) {
       write(modelFile(p),current);
     }catch{}
     const coordinatorView=terminalViews.find(t=>t.address===owner?.address);
-    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>({id:j.id,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)})),messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>publicJob(j,direct,chat)),projectCollaborations,messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};

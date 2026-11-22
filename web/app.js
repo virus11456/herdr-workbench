@@ -1,11 +1,11 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
-import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
+import {attentionItems,taskCards,taskSummary,taskLabels,collaborationUpdates} from './tasks.mjs';
 import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-chat50';
+const UI_BUILD='20261122-collab51';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -510,6 +510,43 @@ function renderTasks(){
   }$('task-items').append(row);
  }
 }
+let collaborationSnapshot='',collaborationExpanded=false,collaborationScope='';
+const reconcileCollaborations=createMessageList($('collaboration-items'),{
+ create:entry=>{const row=el('article','collaboration-update');updateCollaborationNode(row,entry);return row;},
+ update:updateCollaborationNode
+});
+function updateCollaborationNode(row,entry){
+ const task=entry.task;row.dataset.job=task.id;row.dataset.phase=task.phase;
+ let heading=row.querySelector('.collaboration-route'),title=row.querySelector('.collaboration-title'),detail=row.querySelector('.collaboration-detail');
+ if(!heading){
+  heading=el('div','collaboration-route');heading.append(el('strong',''),el('span','task-badge'));
+  title=el('p','collaboration-title');detail=el('p','collaboration-detail');
+  const actions=el('div','collaboration-actions'),view=el('button','','查看詳情'),chat=el('button','','');
+  view.type=chat.type='button';
+  chat.className='collaboration-chat';actions.append(view,chat);row.append(heading,title,detail,actions);
+ }
+ heading.querySelector('strong').textContent=task.source+' → '+task.owner;
+ heading.querySelector('.task-badge').textContent=taskLabels[task.phase];
+ title.textContent=task.title||'協作任務';detail.textContent=task.detail.length>280?task.detail.slice(0,280)+'…':task.detail;
+ const chat=row.querySelector('.collaboration-chat');chat.hidden=!task.agentId||!state.agents.some(a=>a.id===task.agentId);
+ chat.textContent='與 '+task.owner+' 對話';chat.onclick=()=>switchChat(selection.project,task.chat||selection.chat,task.agentId);
+ row.querySelector('.collaboration-actions button').onclick=async()=>{if(task.chat&&task.chat!==selection.chat)await switchChat(selection.project,task.chat,selectedAgent);if(!task.chat||task.chat===selection.chat)openTasks('job:'+task.id);};
+}
+function renderCollaborationUpdates(){
+ const scope=selection.project+':'+selectedAgent;
+ if(scope!==collaborationScope){collaborationScope=scope;collaborationExpanded=false;}
+ const updates=collaborationUpdates(state,selectedAgent,{expanded:collaborationExpanded}),key=JSON.stringify([selection,selectedAgent,collaborationExpanded,updates]);
+ if(key===collaborationSnapshot)return false;collaborationSnapshot=key;
+ $('collaboration-progress').hidden=!updates.rows.length;
+ const labels=updates.rows.map(t=>t.owner+' '+taskLabels[t.phase]);
+ $('collaboration-summary').textContent=labels.join(' · ');
+ $('collaboration-more').hidden=!updates.remaining&&!collaborationExpanded;
+ $('collaboration-more').textContent=collaborationExpanded?'收合協作':'顯示其餘 '+updates.remaining+' 項協作';
+ $('collaboration-more').setAttribute('aria-expanded',String(collaborationExpanded));
+ reconcileCollaborations(JSON.stringify([selection,selectedAgent]),updates.rows.map(task=>({key:task.key,task,signature:JSON.stringify(task)})));
+ return true;
+}
+$('collaboration-more').onclick=()=>{collaborationExpanded=!collaborationExpanded;collaborationSnapshot='';renderCollaborationUpdates();};
 const shownSkillRequests=new Set();let selectedSkillRequest=null;
 function openSkillConsent(request){
  selectedSkillRequest=request;const list=$('skill-consent-details');list.replaceChildren();
@@ -568,7 +605,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v50`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v51`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -620,6 +657,7 @@ function render(){
   changed=reconcileMessages(JSON.stringify([selection,selectedAgent,details]),entries);
   if(!wasBottom&&anchor?.isConnected)feed.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;
  }
+ changed=renderCollaborationUpdates()||changed;
  const oldProgress=progressSnapshot;renderReplyProgress();
  if(wasBottom&&messages.length&&(changed||oldProgress!==progressSnapshot))feed.scrollTop=feed.scrollHeight;
  updateSend();

@@ -1,5 +1,5 @@
 // A display projection of observed state. It never dispatches or accepts work.
-export const taskLabels={pending:'待處理',queued:'等待接收',working:'工作中',blocked:'需要處理',stopped:'已停止',cancelled:'已取消',review:'待驗收',replied:'已回覆',unconfirmed:'回覆未核對',done:'已驗收'};
+export const taskLabels={pending:'待處理',queued:'等待接收',dispatching:'送達待核對',working:'工作中',blocked:'需要處理',stopped:'已停止',cancelled:'已取消',review:'待驗收',replied:'已回覆',unconfirmed:'回覆未核對',done:'已驗收'};
 export function agentTerminal(state,id){return id?state.terminals?.filter(t=>t.agentId===id).at(-1):state.terminals?.find(t=>t.address===state.control?.terminal);}
 export function flock(state){
  const list=[...(!state.agentWorkspace?[{id:null,name:state.coordinatorName||'領頭羊',provider:'claude'}]:[]),...(state.agents||[])];
@@ -27,3 +27,20 @@ export function taskCards(state,agentId=null){
  return rows;
 }
 export function taskSummary(cards){const count=p=>cards.filter(c=>p.includes(c.phase)).length;return{active:count(['queued','working']),attention:count(['pending','blocked']),review:count(['review']),verified:count(['done']),replied:count(['replied']),unconfirmed:count(['unconfirmed'])};}
+
+// Compact chat updates come from durable jobs, never from claims in model text.
+export function collaborationUpdates(state,agentId=null,{expanded=false}={}){
+ const members=state.agents||[],name=id=>members.find(a=>a.id===id)?.name||(id?'已移除的代理':state.coordinatorName||'領頭羊');
+ const rows=(state.projectCollaborations||state.collaborations||[]).filter(j=>!agentId||j.sourceAgent===agentId||j.targetAgent===agentId).map(j=>{
+  const t=agentTerminal(state,j.targetAgent);
+  const blocked=j.status==='working'&&t&&(!j.targetTerminal||j.targetTerminal===t.address)&&(t.state==='finished'||['blocked','error'].includes(t.status?.state));
+  const phase=blocked?'blocked':({provisioning:'queued',queued:'queued',working:j.deliveryConfirmed?'working':'dispatching',awaiting_review:'review',done:'done',failed:'blocked'})[j.status]||'unconfirmed';
+  const source=name(j.sourceAgent),owner=members.find(a=>a.id===j.targetAgent)?.name||j.targetName||name(j.targetAgent);
+  const detail=phase==='review'?`回報已到，等待 ${source} 驗收。`:phase==='done'?j.verification||'已記錄交付者的驗收結果。':phase==='blocked'?j.feedback||'目前受阻，請查看任務詳情或主機提示。':phase==='queued'?(j.feedback?'退回修正：'+j.feedback+'；等待重新接收。':'已安排，尚未確認代理開始執行。'):phase==='working'?'已送達，正在等待實際回報。':phase==='dispatching'?'已安排，送達結果尚未核對，請勿重複交辦。':'狀態尚未核對，請查看詳情。';
+  return{id:j.id,key:(j.sourceChat||state.chat||'legacy')+':'+j.id,chat:j.sourceChat||state.chat,title:j.task,source,owner,agentId:j.targetAgent,phase,detail,verification:j.verification,acceptance:j.acceptance};
+ });
+ const rank={blocked:0,review:1,working:2,queued:3,dispatching:4,unconfirmed:5};
+ const active=rows.filter(r=>r.phase!=='done').sort((a,b)=>rank[a.phase]-rank[b.phase]);
+ const recent=rows.filter(r=>r.phase==='done').slice(-1);
+ return{rows:[...(expanded?active:active.slice(0,3)),...recent],remaining:expanded?0:Math.max(0,active.length-3),active:active.length};
+}

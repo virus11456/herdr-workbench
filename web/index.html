@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261122-chat50"><script src="./app.js?v=20261122-chat50" type="module"></script></head>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=contain"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#17191b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Herdr"><title>Herdr · 你的 AI 團隊</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./app-icon.svg"><link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"><link rel="stylesheet" href="./style.css?v=20261122-collab51"><script src="./app.js?v=20261122-collab51" type="module"></script></head>
 <body>
 <div id="app">
  <button id="sidebar-backdrop" aria-label="關閉專案側欄" tabindex="-1"></button>
@@ -18,6 +18,7 @@
    <details id="task-checklist" hidden><summary id="task-summary">任務進度</summary><div id="task-items"></div></details>
    <button id="earlier-messages" type="button" hidden>載入更早的訊息</button>
    <div id="skill-requests" aria-live="polite" hidden></div><div id="messages"></div>
+   <section id="collaboration-progress" aria-labelledby="collaboration-heading" hidden><h2 id="collaboration-heading">目前協作</h2><p id="collaboration-summary" class="sr-only" role="status" aria-live="polite"></p><div id="collaboration-items"></div><button id="collaboration-more" type="button" aria-controls="collaboration-items" aria-expanded="false">查看所有任務</button></section>
    <div id="reply-progress" class="reply-progress" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   </section>
   <div id="notice" role="status" aria-live="polite"></div><button id="retry-upload" type="button" hidden>重試傳送附件與訊息</button>
