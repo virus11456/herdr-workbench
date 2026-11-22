@@ -308,3 +308,18 @@ test('network-enabled emits a single shell boolean without a trailing JSON resul
  const result=await promisify(execFile)(process.execPath,['team-runtime.mjs','network-enabled'],{env:{...process.env,HERDR_WORKBENCH_HOME:app}});assert.equal(result.stdout,'true\n');
  fs.writeFileSync(path.join(app,'agent-policy.json'),JSON.stringify({networkPreapproved:false}));const disabled=await promisify(execFile)(process.execPath,['team-runtime.mjs','network-enabled'],{env:{...process.env,HERDR_WORKBENCH_HOME:app}});assert.equal(disabled.stdout,'false\n');
 });
+
+test('a queued message retires a confirmed missing old terminal and starts exactly one fresh session without replaying old tasks',t=>{
+ const {c}=fixture(t),old='toldmissing',fresh='tfreshagent',message='ffffffff-ffff-ffff-ffff-ffffffffffff',calls=[];let started=false;
+ fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[old]:{agentId:'engineer',provider:'codex',chat:c.chat,delivered:true,captureHash:'completed-old',lastMessageId:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}}));
+ c.run=(_cmd,[verb,id,...args])=>{calls.push({verb,id,args});if(verb==='get'&&id===old)throw Object.assign(Error('gone'),{stdout:JSON.stringify({error:{kind:'not_found'}})});if(verb==='run'){assert(!started);started=true;return{address:fresh};}if(verb==='get'&&id===fresh)return{address:fresh,cwd:c.cwd,parent:null,state:'live',status:{app:'codex',state:'blocked'},labels:{'team.direct':'true','team.chat':c.chat,'team.agent':'engineer'}};assert.fail('Unexpected Core operation: '+verb);};
+ enqueueDirect(c,'engineer','Only this new message',message);
+ assert.equal(drainDirect(c).started,fresh);const saved=JSON.parse(fs.readFileSync(path.join(c.teamDir,'direct-bindings.json')));assert.equal(saved[old].retiredReason,'terminal_missing');assert.equal(saved[old].lastMessageId,'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');assert.equal(saved[fresh].agentId,'engineer');
+ assert.equal(drainDirect(c).reason,'agent_not_ready');assert.equal(calls.filter(x=>x.verb==='run').length,1);assert.equal(calls.filter(x=>['keys','send'].includes(x.verb)).length,0);assert(fs.existsSync(path.join(c.teamDir,'direct-queue',message+'.json')));
+});
+
+test('an unavailable or foreign old terminal is never treated as a confirmed missing session',t=>{
+ const {c}=fixture(t),old='toldunverified';fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[old]:{agentId:'engineer',provider:'codex',chat:c.chat,delivered:true}}));let runs=0;
+ c.run=(_cmd,[verb])=>{if(verb==='run')runs++;throw Object.assign(Error('core unavailable'),{stdout:JSON.stringify({error:{kind:'unavailable'}})});};
+ enqueueDirect(c,'engineer','Wait safely','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');assert.throws(()=>drainDirect(c),/unavailable/);assert.equal(runs,0);assert(!JSON.parse(fs.readFileSync(path.join(c.teamDir,'direct-bindings.json')))[old].retired);
+});

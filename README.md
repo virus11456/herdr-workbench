@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v46**（介面版本 `20261122-policy46`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v46.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v46.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v47**（介面版本 `20261122-recovery47`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v47.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v47.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v47 修正 Core 明確回報舊終端不存在時，新訊息卡在佇列的問題：保留舊對話與回報，為新的排隊訊息建立一次新會話。未知連線錯誤不會視為終端消失，登入／信任提示仍須本人處理。Google／Antigravity 已實測以保留沙箱的 curl 直接讀取 HTTPS 網頁，並回報到 Herdr；原生 read_url_content 仍未確認可用。
 
 v46 加入 Skill 安裝同意視窗，列出名稱、來源、版本、位置及用途，由你點選「同意這次安裝」或「拒絕」。網路預先授權不包含安裝 Skill。
 

@@ -1,7 +1,7 @@
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
-import {roster,saveRoster,validateRoster,coordinatorProfile,canCreateAgent,canProvisionForMessage,log} from './team-runtime.mjs';
+import {roster,saveRoster,validateRoster,coordinatorProfile,canCreateAgent,canProvisionForMessage,log,missingTerminal} from './team-runtime.mjs';
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
 const save=(p,v)=>{fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});const tmp=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(v),{mode:0o600});fs.renameSync(tmp,p);};
 const heldLocks=new Set();
@@ -293,10 +293,13 @@ function sendDirect(c){
   for(const item of queue){if(seen.has(item.agentId))continue;seen.add(item.agentId);const agent=agents.find(a=>a.id===item.agentId);if(!agent){blocked={sent:0,reason:'agent_removed'};continue;}
   // Discover real sessions; a conversation never requires a coordinator startup.
   const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
-  let entry=Object.entries(bindings).find(([id,b])=>{if(b.agentId!==agent.id)return false;try{const t=directTerminal(c,id)?.t;return t?.state==='live'&&(b.provider||({'claude-code':'claude',claude:'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||agent.provider)===agent.provider;}catch{return false;}});
+  let entry=Object.entries(bindings).find(([id,b])=>{if(b.retired||b.agentId!==agent.id)return false;try{const t=directTerminal(c,id)?.t;return t?.state==='live'&&(b.provider||({'claude-code':'claude',claude:'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||agent.provider)===agent.provider;}catch{return false;}});
   if(!entry){
    const previous=Object.entries(bindings).filter(([,b])=>b.agentId===agent.id&&(!b.provider||b.provider===agent.provider)&&!b.retired).at(-1);
-   if(previous){const actual=directTerminal(c,previous[0]);if(actual?.t.state==='finished'&&!previous[1].delivered&&!previous[1].captureHash){if(!previous[1].retryRequested){blocked={sent:0,reason:'startup_stopped',terminal:previous[0]};continue;}previous[1].retired=true;save(file,bindings);}}
+   if(previous){
+    let actual;try{actual=directTerminal(c,previous[0]);}catch(error){if(!missingTerminal(error))throw error;previous[1].retired=true;previous[1].retiredReason='terminal_missing';save(file,bindings);}
+    if(actual?.t.state==='finished'&&!previous[1].delivered&&!previous[1].captureHash){if(!previous[1].retryRequested){blocked={sent:0,reason:'startup_stopped',terminal:previous[0]};continue;}previous[1].retired=true;save(file,bindings);}
+   }
    const made=c.run('hc',['run','--bg','--no-parent','--cwd',c.cwd,'--name','direct-'+agent.id.slice(-12)+'-'+(c.chat||'legacy').slice(-6)+'-'+randomUUID().slice(0,4),'--label','team.direct=true','--label','team.chat='+(c.chat||'legacy'),'--label','team.agent='+agent.id,path.join(os.homedir(),'.local/bin','herdr-team-'+agent.provider)]);
    const id=made.address||made.terminal;if(!/^t[a-z0-9]+$/.test(id||''))throw Error('Core did not return a real direct terminal.');
    bindings[id]={agentId:agent.id,provider:agent.provider,chat:c.chat||'legacy',createdAt:Date.now()};save(file,bindings);return{sent:0,started:id};
