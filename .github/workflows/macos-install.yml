@@ -1,0 +1,141 @@
+name: Cloud macOS v53 install acceptance
+on:
+  push:
+    branches: ['qa/cloud-macos-v53']
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Download public package and verify SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          sw_vers
+          node --version
+          test ! -e "$HOME/.config/herdr-workbench"
+          release=3a4e8c6bc20e8ac4cdf714fafa0029205728d35c
+          url="https://raw.githubusercontent.com/virus11456/herdr-workbench/$release/downloads"
+          mkdir -p "$RUNNER_TEMP/workbench-install"
+          cd "$RUNNER_TEMP/workbench-install"
+          for file in herdr-workbench-0.8.11-dev-v53.zip herdr-workbench-0.8.11-dev-v53.zip.sha256; do
+            curl --fail --silent --show-error --location --retry 3 "$url/$file" -o "$file"
+          done
+          shasum -a 256 -c herdr-workbench-0.8.11-dev-v53.zip.sha256
+          unzip -q herdr-workbench-0.8.11-dev-v53.zip
+          test -x herdr-workbench-0.8.11-dev-v53/Install.command
+      - name: Install official CLI dependencies without signing in
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p "$HOME/.local/bin"
+          # Upstream installer checks its signed release manifest.
+          curl --fail --silent --show-error --location --retry 3 https://releases.herdr.dev/core/install.sh -o "$RUNNER_TEMP/herdr-core-install.sh"
+          sh "$RUNNER_TEMP/herdr-core-install.sh"
+          npm install --global --prefix "$HOME/.local" --no-audit --no-fund \
+            @anthropic-ai/claude-code@2.1.323 @openai/codex@0.171.0-alpha.13 @minimax-ai/code@0.7.8
+          curl --fail --silent --show-error --location --retry 3 \
+            https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/darwin-arm/cli_mac_arm64.tar.gz \
+            -o "$RUNNER_TEMP/agy.tar.gz"
+          printf '%s  %s\n' d9825ebce6954df6b7841970fd7ef3d37acdfe628993f14c396ec73b20ed06bbe95e7b7be047e7c0b0baaf009f75fe95ce051b9f4af5e84b002da15bda4a1f45 "$RUNNER_TEMP/agy.tar.gz" | shasum -a 512 -c -
+          tar -xOzf "$RUNNER_TEMP/agy.tar.gz" antigravity > "$HOME/.local/bin/agy"
+          chmod 755 "$HOME/.local/bin/agy"
+          for tool in hc claude codex mcode agy; do "$tool" --version; done
+      - name: Preview, install and verify background services
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$RUNNER_TEMP/workbench-install/herdr-workbench-0.8.11-dev-v53"
+          args=(--origin https://workbench-cloud-qa.example.test --login qa@example.test)
+          ./Install.command --dry-run "${args[@]}"
+          test ! -e "$HOME/.config/herdr-workbench"
+          node setup.mjs "${args[@]}"
+          suite=gui/$(id -u)
+          for service in web queue; do
+            plutil -lint "$HOME/Library/LaunchAgents/dev.herdr.workbench-$service.plist"
+            launchctl print "$suite/dev.herdr.workbench-$service" > /dev/null
+          done
+          hc templates > "$RUNNER_TEMP/hc-templates.json"
+          for template in claude-task codex-implement minimax-cn antigravity-task; do
+            grep -q "herdr-$template" "$RUNNER_TEMP/hc-templates.json"
+          done
+          curl -fsS --retry 12 --retry-connrefused --retry-delay 1 http://127.0.0.1:48724/herdr/health
+          echo
+          lsof -nP -iTCP:48724 -sTCP:LISTEN | grep -F '127.0.0.1:48724 (LISTEN)'
+          node --input-type=module - <<'JS'
+          import assert from 'node:assert/strict';
+          const base='http://127.0.0.1:48724/herdr/';
+          const identity={'Tailscale-User-Login':'qa@example.test'};
+          assert.equal((await fetch(base)).status,403);
+          const html=await fetch(base,{headers:identity});
+          assert.equal(html.status,200);
+          assert.match(await html.text(),/Herdr/);
+          assert.equal((await fetch(base+'api/state',{headers:{...identity,Origin:'https://wrong.example.test'}})).status,403);
+          let status;
+          for(let i=0;i<20;i++){
+            const response=await fetch(base+'api/state',{headers:identity});
+            assert.equal(response.status,200);
+            status=await response.json();
+            if(status.appOpen)break;
+            await new Promise(resolve=>setTimeout(resolve,500));
+          }
+          assert.equal(status.appVersion,'0.8.11-dev');
+          assert.equal(status.uiBuild,'20261122-flow53');
+          assert.equal(status.appOpen,true);
+          assert.equal(status.backendMode,'background');
+          assert.deepEqual(status.projects,[]);
+          const created=await fetch(base+'api/project',{method:'POST',headers:{...identity,
+            Origin:'https://workbench-cloud-qa.example.test','Content-Type':'application/json','X-Herdr-CSRF':status.csrfToken},
+            body:JSON.stringify({name:'Clean VM acceptance'})});
+          assert.equal(created.status,200);
+          const next=await created.json();
+          const selected=await fetch(base+'api/state?'+new URLSearchParams(next),{headers:identity}).then(r=>r.json());
+          assert.equal(selected.agents[0].id,'starter');
+          assert.deepEqual(selected.terminals,[]);
+          console.log('Passed: fresh macOS install, two LaunchAgents, four Core templates, loopback PWA, identity/Origin, starter project.');
+          JS
+      - name: Verify installed v53 runtime, wrappers and package regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/workbench-install/herdr-workbench-0.8.11-dev-v53"
+          for module_file in project-memory.mjs direct.mjs team-runtime.mjs worker-chat.mjs agy-reply.mjs minimax-reply.mjs web/server.mjs web/app.js web/agent-management.mjs web/index.html web/sw.js; do
+            cmp "$module_file" "$HOME/.config/herdr-workbench/$module_file"
+          done
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          node --input-type=module - <<'JS'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import assert from 'node:assert/strict';
+          import {deploymentPlan,findTool} from './setup.mjs';
+          const home=path.join(os.homedir(),'.config/herdr-workbench');
+          const tools={node:process.execPath,...Object.fromEntries(['hc','claude','codex','mcode','agy'].map(n=>[n,findTool(n)]))};
+          const plan=deploymentPlan({home,origin:'https://workbench-cloud-qa.example.test',login:'qa@example.test'},tools);
+          let checked=0;
+          for(const file of plan.files){
+            // Private runtime and generated integration settings are checked in place; never uploaded.
+            if(file.target.endsWith('/web/projects.json'))continue;
+            assert.deepEqual(fs.readFileSync(file.target),Buffer.from(file.content),file.target);
+            checked++;
+          }
+          assert(checked>40);
+          for(const engine of ['claude','codex','minimax','antigravity']){
+            const wrapper=path.join(os.homedir(),'.local/bin/herdr-team-'+engine);
+            assert(fs.readFileSync(wrapper,'utf8').includes('HERDR_TEAM_PROJECT_ROOT'));
+          }
+          assert.equal(JSON.parse(fs.readFileSync(path.join(home,'agent-policy.json'))).networkPreapproved,false);
+          console.log('Passed: exact installed v53 runtime and wrappers; default network and Skill approval policy retained; no model sessions. Files: '+checked);
+          JS
