@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {networkSettings,miniMaxNetworkPermissions} from './agent-policy.mjs';
 // Workbench deployment is independent from the upstream Herdr desktop installer.
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {fileURLToPath,pathToFileURL} from 'node:url';import {randomUUID} from 'node:crypto';import {execFileSync} from 'node:child_process';import {createInterface} from 'node:readline/promises';
@@ -29,10 +30,11 @@ export function deploymentPlan(input,tools){
  config.codexQuotaCli=tools.codex;
  if(tools.mmx)config.miniMaxQuotaCli=tools.mmx;
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['package.json','package-lock.json','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs','agent-policy.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
  try{existingHooks=JSON.parse(fs.readFileSync(agyHooks,'utf8'));if(!existingHooks||typeof existingHooks!=='object'||Array.isArray(existingHooks))throw Error('Invalid hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
  add(agyHooks,JSON.stringify({...existingHooks,'herdr-workbench-reply':{Stop:[{type:'command',command:quote(tools.node)+' '+quote(path.join(home,'agy-reply.mjs')),timeout:10}]}},null,2)+'\n');
+ if(input.networkPreapproved){const file=input.minimaxPermissions||path.join(os.homedir(),'.minimax/permission.json');let previous;try{previous=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}add(file,JSON.stringify(miniMaxNetworkPermissions(previous),null,2)+'\n');}
  const minimaxHooks=input.minimaxHooks||path.join(os.homedir(),'.minimax/hooks.json');let previousMinimax={enabled:true,hooks:{}};
  try{previousMinimax=JSON.parse(fs.readFileSync(minimaxHooks,'utf8'));if(!previousMinimax||typeof previousMinimax!=='object'||Array.isArray(previousMinimax))throw Error('Invalid MiniMax hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
  const stop=(previousMinimax.hooks?.Stop||[]).map(group=>({...group,hooks:(group.hooks||[]).filter(hook=>hook.name!=='Herdr reply')})).filter(group=>group.hooks.length);
@@ -51,8 +53,9 @@ export function deploymentPlan(input,tools){
   add(path.join(core,'templates',name+'.md'),fs.readFileSync(path.join(source,'templates',name+'.md'),'utf8').replaceAll(marker,quote(path.join(bin,command))));
  }
  for(const name of ['server.mjs','agent-models.mjs','artifacts.mjs','attachments.mjs','usage.mjs','push.mjs','tasks.mjs','agent-management.mjs','index.html','app.js','style.css','format.mjs','viewport.mjs','activity.mjs','manifest.webmanifest','sw.js','app-icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','sheep.svg','shepherd.svg'])add(path.join(home,'web',name),fs.readFileSync(path.join(source,'web',name)));
- add(path.join(home,'team-claude-settings.json'),JSON.stringify({...hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),...quotaStatusSettings('claude',home,tools.node)},null,2)+'\n');
- add(path.join(home,'team-antigravity-settings.json'),JSON.stringify(quotaStatusSettings('antigravity',home,tools.node),null,2)+'\n');
+ add(path.join(home,'team-claude-settings.json'),JSON.stringify({...hooksSettings(path.join(home,'team-runtime.mjs'),tools.node),...quotaStatusSettings('claude',home,tools.node),...networkSettings('claude',input.networkPreapproved)},null,2)+'\n');
+ add(path.join(home,'team-antigravity-settings.json'),JSON.stringify({...quotaStatusSettings('antigravity',home,tools.node),...networkSettings('antigravity',input.networkPreapproved)},null,2)+'\n');
+ add(path.join(home,'agent-policy.json'),JSON.stringify({networkPreapproved:input.networkPreapproved===true,skillInstall:'ask'},null,2)+'\n');
  add(path.join(home,'service.json'),JSON.stringify(config,null,2)+'\n');add(path.join(home,'web/config.json'),JSON.stringify(config,null,2)+'\n');
  if(input.projects)add(path.join(home,'web/projects.json'),JSON.stringify(input.projects,null,2)+'\n');
  const agents=[];
@@ -89,6 +92,7 @@ async function main(){
  for(let i=0;i<args.length;i++){const key=args[i];if(names[key]){if(!args[i+1]||args[i+1].startsWith('--'))throw Error('缺少參數：'+key);input[names[key]]=args[++i];}else if(['--dry-run','--no-start','--help','--import-desktop','--confirm'].includes(key))flags.add(key);else throw Error('未知參數：'+key);}
  if(flags.has('--help')){console.log('node setup.mjs [--dry-run] [--origin https://host.tailnet.ts.net --login owner@example.com] [--drive-root PATH] [--import-desktop] [--no-start]');return;}
  const existingHome=input.home||path.join(os.homedir(),'.config/herdr-workbench');let previous;try{previous=JSON.parse(fs.readFileSync(path.join(existingHome,'service.json')));}catch{}
+ try{input.networkPreapproved=JSON.parse(fs.readFileSync(path.join(existingHome,'agent-policy.json'))).networkPreapproved===true;}catch(e){if(e.code!=='ENOENT')throw e;}
  if(previous){input.origin??=previous.origin;input.login??=previous.allowedLogin;input.port??=previous.port;input.projectRoot??=previous.projectRoot;input.driveRoot??=previous.driveRoot;input.legacyProjects=previous.legacyProjects;}
  if(!input.origin||!input.login){
   if(!process.stdin.isTTY)throw Error('首次設定需提供 --origin 與 --login，或在互動式終端執行 Install.command。');

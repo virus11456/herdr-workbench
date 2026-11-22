@@ -256,3 +256,55 @@ test('history index reuses unchanged bytes, reads appended Unicode correctly and
   fs.writeFileSync(file,event('replacement'));const replaced=conversationHistoryPrompt(c,'engineer','replacement');assert(replaced.includes('replacement'));assert(!replaced.includes('old rule'));
  }finally{fs.readSync=original;}
 });
+
+test('skill consent queues exactly one bounded grant only after the user decision; deny and network permissions stay separate',async t=>{
+ const {c}=fixture(t),{requestSkill,skillRequests,networkSettings,agentPolicyPrompt}=await import('./agent-policy.mjs');
+ const {decideSkillRequest}=await import('./direct.mjs');
+ const source={id:'engineer',name:'Engineer'},messageId='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+ const args={name:'Example helper',source:'https://example.com/skills/helper',version:'abc123',destination:'.agents/skills/helper',reason:'Read local project notes; no secrets or external write'};
+ const row=requestSkill(c,args,source,messageId);
+ assert.equal(row.status,'pending');assert(!fs.existsSync(path.join(c.teamDir,'direct-queue')));
+ assert.equal(requestSkill(c,args,source,messageId).id,row.id);
+ assert.throws(()=>requestSkill(c,{...args,source:'https://user:password@example.com/x'},source,messageId),/HTTPS/);
+ assert.throws(()=>decideSkillRequest(c,{id:row.id,decision:'automatic'}));
+ const approved=decideSkillRequest(c,{id:row.id,decision:'approve'});assert.equal(approved.status,'approved');
+ const queue=path.join(c.teamDir,'direct-queue'),files=fs.readdirSync(queue);assert.equal(files.length,1);
+ const item=JSON.parse(fs.readFileSync(path.join(queue,files[0])));assert.equal(item.agentId,'engineer');assert(item.text.includes('abc123'));assert(item.text.includes('點選同意'));assert.equal(item.allowAgentCreation,false);
+ decideSkillRequest(c,{id:row.id,decision:'approve'});assert.equal(fs.readdirSync(queue).length,1);
+ assert.throws(()=>decideSkillRequest(c,{id:row.id,decision:'deny'}),/已處理/);
+ const denied=requestSkill(c,{...args,name:'Another helper'},source,messageId);decideSkillRequest(c,{id:denied.id,decision:'deny'});
+ assert.equal(skillRequests(c).find(r=>r.id===denied.id).status,'denied');assert.equal(fs.readdirSync(queue).length,2);
+ assert(agentPolicyPrompt(c).includes('必須先由使用者點選同意'));
+ assert.deepEqual(networkSettings('claude',false),{});
+ const claude=networkSettings('claude',true);assert.deepEqual(claude.permissions.allow,['WebSearch','WebFetch']);assert.equal(claude.sandbox.enabled,undefined);assert.equal(claude.permissions.defaultMode,undefined);
+ const google=networkSettings('antigravity',true);assert.deepEqual(google.permissions.allow,['read_url(*)','execute_url(*)']);assert(!JSON.stringify(google).includes('command(*)'));
+});
+
+test('MiniMax network grant preserves deny/ask and never grants shell or Skill installation',async()=>{
+ const {miniMaxNetworkPermissions}=await import('./agent-policy.mjs');
+ const old={version:2,allow:[],deny:[{tool_name:'web_fetch',matcher:{kind:'command',pattern:'https://blocked.test'}}],ask:[{tool_name:'skill',matcher:{kind:'tool'}}]};
+ const next=miniMaxNetworkPermissions(old);assert.deepEqual(next.deny,old.deny);assert.deepEqual(next.ask,old.ask);assert.deepEqual(next.allow.map(r=>r.tool_name),['web_fetch','web_search']);
+ assert.deepEqual(miniMaxNetworkPermissions(next),next);assert.equal(old.allow.length,0);
+ assert.deepEqual(miniMaxNetworkPermissions({allow:[],deny:['bash'],ask:['skill']}).allow,['web_fetch','web_search']);assert.throws(()=>miniMaxNetworkPermissions({version:3}));
+});
+
+test('a collaborating worker waits for Skill consent, then resumes the same job without premature review',async t=>{
+ const {c}=fixture(t),{skillRequests}=await import('./agent-policy.mjs'),{decideSkillRequest}=await import('./direct.mjs');
+ const terminal='tunitskill',message='eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',job='unit-job';const sent=[];
+ fs.mkdirSync(path.join(c.teamDir,'direct-queue'),{recursive:true});
+ fs.writeFileSync(path.join(c.teamDir,'direct-queue',message+'.json.sent'),JSON.stringify({id:message,agentId:'engineer',text:'Work',allowAgentCreation:false}));
+ fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({[terminal]:{agentId:'engineer',provider:'codex',chat:c.chat,activeJob:job,awaitingReply:true,delivered:true,lastMessageId:message}}));
+ fs.writeFileSync(path.join(c.teamDir,'collaborations.json'),JSON.stringify({[job]:{id:job,targetAgent:'engineer',targetTerminal:terminal,status:'working',revision:1}}));
+ c.run=(_cmd,[verb,id,text])=>{if(verb==='get')return{address:id,cwd:c.cwd,parent:null,state:'live',turn:1,status:{app:'codex',state:'idle'},labels:{'team.direct':'true','team.chat':c.chat,'team.agent':'engineer'}};if(verb==='send'){sent.push(text);return{ok:true};}throw Error('Unexpected Core call');};
+ directReply({...c,terminal},'需要技能。\n<herdr-action>'+JSON.stringify({action:'request-skill-install',name:'Demo',source:'https://example.com/skill',version:'abc123',destination:'.agents/skills/demo',reason:'Test consent'})+'</herdr-action>','skill-request');
+ const row=skillRequests(c)[0];assert.equal(row.status,'pending');assert.equal(JSON.parse(fs.readFileSync(path.join(c.teamDir,'collaborations.json')))[job].status,'working');
+ decideSkillRequest(c,{id:row.id,decision:'approve'});assert.equal(drainDirect(c).sent,1);assert(sent[0].includes('點選同意'));
+ directReply({...c,terminal},'已完成並核對。','skill-finished');assert.equal(JSON.parse(fs.readFileSync(path.join(c.teamDir,'collaborations.json')))[job].status,'awaiting_review');
+ assert(!fs.existsSync(path.join(c.cwd,'.agents/skills/demo')));
+});
+
+test('network-enabled emits a single shell boolean without a trailing JSON result',async t=>{
+ const {root}=fixture(t),app=path.join(root,'app');fs.mkdirSync(app);fs.writeFileSync(path.join(app,'agent-policy.json'),JSON.stringify({networkPreapproved:true}));
+ const result=await promisify(execFile)(process.execPath,['team-runtime.mjs','network-enabled'],{env:{...process.env,HERDR_WORKBENCH_HOME:app}});assert.equal(result.stdout,'true\n');
+ fs.writeFileSync(path.join(app,'agent-policy.json'),JSON.stringify({networkPreapproved:false}));const disabled=await promisify(execFile)(process.execPath,['team-runtime.mjs','network-enabled'],{env:{...process.env,HERDR_WORKBENCH_HOME:app}});assert.equal(disabled.stdout,'false\n');
+});

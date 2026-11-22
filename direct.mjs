@@ -1,3 +1,4 @@
+import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
 import {roster,saveRoster,validateRoster,coordinatorProfile,canCreateAgent,canProvisionForMessage,log} from './team-runtime.mjs';
@@ -139,11 +140,11 @@ export function legacyCollaborationReply(c,text,role){
   return {captured:true};
  });
 }
-function handleReplyActions(c,actions,source,grant){
+function handleReplyActions(c,actions,source,grant,messageId){
  for(const action of actions){
   try{
    const args=JSON.parse(action[1]);
-   saveCollaboration(c,args,grant);
+   if(args.action==='request-skill-install')requestSkill(c,args,source,messageId);else saveCollaboration(c,args,grant);
   }catch(error){
    const route=source.id?{target:source.id,agentId:source.id,direct:true}:{};
    log(c,'系統','協作請求未執行：'+error.message,'progress',route);
@@ -165,10 +166,11 @@ function saveDirectReply(c,text,key,model){
  const last=actual.binding.lastMessageId;
  const policy=validMessageId(last)&&read(queueFile(c,last,true)+'.sent')?.allowAgentCreation;
  const grant=actual.binding.awaitingReply&&actual.binding.delivered&&canProvisionForMessage(c,agent.id,policy)?last:null;
- handleReplyActions(c,actions,agent,grant);
- if(active){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[active],waiting=Object.values(jobs).some(j=>j.id!==active&&(j.parentId===active||(!j.parentId&&j.sourceTerminal===c.terminal&&j.createdAt>=job?.createdAt))&&openJob(j));if(!waiting&&job&&job.targetAgent===agent.id&&job.targetTerminal===c.terminal&&job.status==='working'){job.reply=visible||text;job.status='awaiting_review';job.revision++;job.repliedAt=Date.now();job.notified=false;save(path.join(c.teamDir,'collaborations.json'),jobs);const latest=read(file);delete latest[c.terminal].activeJob;save(file,latest);}}
+ handleReplyActions(c,actions,agent,grant,actual.binding.delivered?last:null);
+ if(active&&!skillRequests(c).some(r=>r.agentId===agent.id&&r.messageId===last&&r.status==='pending')){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[active],waiting=Object.values(jobs).some(j=>j.id!==active&&(j.parentId===active||(!j.parentId&&j.sourceTerminal===c.terminal&&j.createdAt>=job?.createdAt))&&openJob(j));if(!waiting&&job&&job.targetAgent===agent.id&&job.targetTerminal===c.terminal&&job.status==='working'){job.reply=visible||text;job.status='awaiting_review';job.revision++;job.repliedAt=Date.now();job.notified=false;save(path.join(c.teamDir,'collaborations.json'),jobs);const latest=read(file);delete latest[c.terminal].activeJob;save(file,latest);}}
  return{captured:true,direct:true};
 }
+export function decideSkillRequest(c,args){return withState(c,()=>decideSkill(c,args,(agentId,text,id)=>enqueueDirectLocked(c,agentId,text,id,false)));}
 export function collaborate(c,args){return withState(c,()=>saveCollaboration(c,args));}
 function saveCollaboration(c,args,grant){
  const actual=directTerminal(c,c.terminal);
@@ -301,13 +303,13 @@ function sendDirect(c){
   }
   const [id]=entry,t=directTerminal(c,id).t;
   if(!['idle','done'].includes(t.status?.state)||!t.status?.app){blocked={sent:0,reason:'agent_not_ready',terminal:id};continue;}
-  if(bindings[id].activeJob){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
+  if(bindings[id].activeJob&&!skillRequests(c).some(r=>r.id===item.id&&r.agentId===agent.id&&['approved','denied'].includes(r.status))){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
   const lease=read(path.join(c.teamDir,'direct-delivery.json'));if(lease?.terminal===id&&bindings[id].awaitingReply!==false&&Date.now()-lease.time<10000){blocked={sent:0,reason:'delivery_settling'};continue;}
   const creation=canProvisionForMessage(c,agent.id,item.allowAgentCreation)?item.id:null;
   const role=canCreateAgent(c,agent.id)
    ?'你是本專案的領頭羊。收到目標後先拆解並判斷分工，使用者文字指定人選時照指派實際送出，未指定時依任務挑選名冊成員。交付目標本身允許你在既有專案成員間完成所需分工。簡單問題與狀態查詢可直接答覆。'
    :'這是使用者直接交給你的任務，你應親自執行，依使用者指示才找同專案其他成員協作。';
-  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
+  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${agentPolicyPrompt(c)}${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
   bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
   if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
 

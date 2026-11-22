@@ -5,5 +5,8 @@ if [ -n "${HC_TERMINAL_ID:-}" ]; then
   HERDR_TEAM_CHAT_ID=$("$HOME/.local/bin/hc" get "$HC_TERMINAL_ID" | @NODE_SHELL@ -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{const chat=JSON.parse(s).labels?.["team.chat"];process.stdout.write(chat&&chat!=="legacy"?chat:"");});')
   export HERDR_TEAM_CHAT_ID
 fi
-# Keep the user's sandbox and permission profile unchanged.
+# Enable only the owner's scoped network grant; keep other permissions unchanged.
+if [ "$("$HOME/.local/bin/herdr-team-runtime" network-enabled)" = true ]; then
+  set -- --search --sandbox workspace-write -c sandbox_workspace_write.network_access=true "$@"
+fi
 exec "$HOME/.local/bin/codex" --no-daemon -c @NOTIFY_CONFIG@ "$@"

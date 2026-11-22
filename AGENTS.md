@@ -4,6 +4,7 @@ This is an independent custom workbench. Publish only to this repository's confi
 
 - Keep program source separate from per-machine settings, credentials, conversations, runtime state, backups and acceptance artifacts.
 - Preserve the user's existing files and settings. Preview installation changes and back up every overwritten target.
+- Install or update a Skill only after the user explicitly approves the exact source, version and destination; network authorization never grants Skill installation.
 - Do not answer login, trust, permission or payment prompts. Do not disable agent sandboxes or invent terminal IDs.
 - Runtime requests must originate from the real current coordinator; read the response for the same request ID. Queued is not success.
 - Keep the private service bound to loopback, behind Tailscale Serve, with identity, Origin and CSRF validation. Do not enable Funnel.

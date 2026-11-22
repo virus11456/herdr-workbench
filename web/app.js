@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-scroll44';
+const UI_BUILD='20261122-policy46';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -156,15 +156,38 @@ function renderAttachments(){
  });
 }
 $('add-attachment').onclick=()=>$('attachment-input').click();
-$('attachment-input').onchange=event=>{
- const input=event.currentTarget,files=[...input.files],current=currentAttachments();
- input.value='';
- if(posting||!state?.project||!files.length)return;
- if(current.length+files.length>fileCountLimit){notice('每則訊息最多附 4 個檔案。');return;}
- if(files.some(file=>file.size<1||file.size>fileSizeLimit)){notice('請選擇 15 MB 以內的非空檔案。');return;}
+function addAttachments(files){
+ const current=currentAttachments();
+ if(!files.length)return false;
+ if(posting||navigating){notice('正在傳送或切換對話，請稍候再加入附件。');return false;}
+ if(!state?.project||state.projectAvailable===false){notice('請先開啟可使用的專案對話。');return false;}
+ if(current.length+files.length>fileCountLimit){notice('每則訊息最多附 4 個檔案。');return false;}
+ if(files.some(file=>file.size<1||file.size>fileSizeLimit)){notice('請選擇 15 MB 以內的非空檔案。');return false;}
  attachmentsByDraft.set(draftKey(),[...current,...files]);
  notice('附件已加入草稿，送出時才會上傳。');updateSend();
+ return true;
+}
+$('attachment-input').onchange=event=>{
+ const input=event.currentTarget,files=[...input.files];input.value='';addAttachments(files);
 };
+const fileDropArea=document.querySelector('main');let fileDragDepth=0;
+const hasDraggedFiles=event=>[...(event.dataTransfer?.types||[])].includes('Files')||!!event.dataTransfer?.files?.length;
+function clearFileDrag(){fileDragDepth=0;$('file-drop-hint').hidden=true;}
+fileDropArea.addEventListener('dragenter',event=>{
+ if(!hasDraggedFiles(event))return;
+ event.preventDefault();fileDragDepth++;$('file-drop-hint').hidden=false;
+});
+fileDropArea.addEventListener('dragover',event=>{if(hasDraggedFiles(event)){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
+fileDropArea.addEventListener('dragleave',()=>{if(fileDragDepth){fileDragDepth--;if(!fileDragDepth)clearFileDrag();}});
+fileDropArea.addEventListener('drop',event=>{
+ if(!hasDraggedFiles(event))return;
+ event.preventDefault();clearFileDrag();
+ if(addAttachments([...event.dataTransfer.files])&&!compactMode.matches)$('draft').focus();
+});
+document.addEventListener('dragover',event=>{if(hasDraggedFiles(event))event.preventDefault();});
+document.addEventListener('drop',event=>{if(hasDraggedFiles(event)){event.preventDefault();clearFileDrag();}});
+document.addEventListener('dragend',clearFileDrag);window.addEventListener('blur',clearFileDrag);
+document.addEventListener('keydown',event=>{if(event.key==='Escape')clearFileDrag();});
 async function uploadFiles(scope,id,files,csrf){
  const names=[];
  for(const [slot,file] of files.entries()){
@@ -459,10 +482,31 @@ function renderTasks(){
   }$('task-items').append(row);
  }
 }
+const shownSkillRequests=new Set();let selectedSkillRequest=null;
+function openSkillConsent(request){
+ selectedSkillRequest=request;const list=$('skill-consent-details');list.replaceChildren();
+ for(const [label,value]of [['代理',request.agentName],['名稱',request.spec.name],['來源',request.spec.source],['版本',request.spec.version],['安裝位置',request.spec.destination],['用途與權限',request.spec.reason]])list.append(el('dt','',label),el('dd','',value));
+ $('skill-consent-error').textContent='';$('skill-approve').disabled=false;$('skill-deny').disabled=false;
+ shownSkillRequests.add(request.id);if(!$('skill-consent').open)$('skill-consent').showModal();$('skill-deny').focus();
+}
+$('skill-consent-close').onclick=()=>$('skill-consent').close();
+for(const [button,decision]of [['skill-approve','approve'],['skill-deny','deny']])$(button).onclick=async()=>{
+ const request=selectedSkillRequest,scope={...selection};if(!request)return;
+ $('skill-approve').disabled=true;$('skill-deny').disabled=true;
+ try{await api('skill-decision',{...scope,chat:request.chat||scope.chat,id:request.id,decision});$('skill-consent').close();await refresh();}
+ catch(error){$('skill-consent-error').textContent=error.message;$('skill-approve').disabled=false;$('skill-deny').disabled=false;}
+};
+function renderSkillRequests(agent){
+ const pending=(state.skillRequests||[]).filter(r=>r.status==='pending'&&r.agentId===agent?.id);
+ const node=$('skill-requests');node.replaceChildren();node.hidden=!pending.length;
+ for(const request of pending){const card=el('div','skill-request');card.append(el('p','',request.agentName+' 想安裝 Skill：'+request.spec.name));const button=el('button','','檢視安裝請求');button.type='button';button.onclick=()=>openSkillConsent(request);card.append(button);node.append(card);}
+ const next=pending.find(r=>!shownSkillRequests.has(r.id));
+ if(next&&!document.querySelector('dialog[open]'))openSkillConsent(next);
+}
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v44`:'版本待確認';
- renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v46`:'版本待確認';
+ renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
  const project=activeProject(),profile=agent||{provider:live?.provider||state.coordinatorProvider||'claude',model:state.coordinatorPreferredModel};

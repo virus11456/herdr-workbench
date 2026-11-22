@@ -1,3 +1,4 @@
+import {agentPolicyPrompt,networkPreapproved} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
@@ -69,7 +70,7 @@ export function saveRoster(c,value) {
   });
 }
 export function teamBrief(c) {
-  return '專案協作：使用者交付目標後，你先拆解並判斷應該由誰執行。使用者在文字中點名某位代理或指定分工時，依要求實際派工。未指定人選時，依專案名冊和職責主動派工，需要協作即可用既有代理。單純問候、狀態查詢或簡單問題可直接答覆。點名、分析或選人都不能代替實際送達。專案代理名冊：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
+  return agentPolicyPrompt(c)+'專案協作：使用者交付目標後，你先拆解並判斷應該由誰執行。使用者在文字中點名某位代理或指定分工時，依要求實際派工。未指定人選時，依專案名冊和職責主動派工，需要協作即可用既有代理。單純問候、狀態查詢或簡單問題可直接答覆。點名、分析或選人都不能代替實際送達。專案代理名冊：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
     '你是這段對話的協調入口，不是整個工作台唯一的中介。使用者可直接和每位代理聊天；已加入的代理可依使用者授權，透過工作台在彼此對話交付協作、收取真實回報、退回修正並驗收。不能宣稱所有訊息或代理協作都必須經過你。只處理交付給你的任務，不強制規劃→開發→審查。'+
     '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
@@ -169,7 +170,7 @@ export function context(cwd = process.cwd(), terminal = process.env.HC_TERMINAL_
   const teamBase=stateBase&&!options.legacyProjects?.includes(root)?stateBase:path.join(root,'.herdr-team');
   const memoryDir=options.appHome?path.join(options.appHome,'project-memory',projectKey):teamBase;
   const usageDir=stateBase&&path.join(stateBase,...conversation);
-  return {cwd:root,chat,headless:!!options.headless,privateState:teamBase===stateBase,teamBase,teamDir:path.join(teamBase,...conversation),memoryDir,usageDir,terminal,
+  return {cwd:root,appHome:options.appHome,chat,headless:!!options.headless,privateState:teamBase===stateBase,teamBase,teamDir:path.join(teamBase,...conversation),memoryDir,usageDir,terminal,
     run:run||((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})))};
 }
 function coreLaunch(c,argv) {
@@ -557,7 +558,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (cmd === 'codex-notify') {
       const event = JSON.parse(args[0] || '{}');
       result = captureReply(event, context(event.cwd || process.cwd()), 'Codex');
-    } else if (cmd === 'model-id') { process.stdout.write(selectedModel(context()) + '\n'); result = null; }
+    } else if (cmd === 'network-enabled') {process.stdout.write(networkPreapproved()?'true\n':'false\n');result=null;}
+    else if (cmd === 'model-id') { process.stdout.write(selectedModel(context()) + '\n'); result = null; }
     else if (cmd === 'switch-model') result = await switchModel(context(), args[0]);
     else if (cmd === 'direct-report') result = directReply(context(),args[0],String(Date.now()));
     else if (cmd === 'checklist') result = checklist(context());
@@ -577,6 +579,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (cmd === 'response') result = await response(context(), args[0]);
     else if (cmd === 'settings') result = hooksSettings(args[0], args[1]);
     else throw new Error('Unknown runtime command');
-    if (!['hook','reply','codex-notify','model-id','prompt','state-dir'].includes(cmd)) process.stdout.write(JSON.stringify(result ?? { ok: true }) + '\n');
+    if (!['hook','reply','codex-notify','model-id','network-enabled','prompt','state-dir'].includes(cmd)) process.stdout.write(JSON.stringify(result ?? { ok: true }) + '\n');
   } catch (error) { console.error(`Herdr team: ${error.message}`); process.exitCode = 1; }
 }

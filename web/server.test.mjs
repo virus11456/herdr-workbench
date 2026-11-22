@@ -368,3 +368,21 @@ test('conversation usage counts matching observed deliveries and replies without
  const events=[delivered,delivered,{...delivered,messageId:'other',provider:'?'},{...reply,target:'another'},reply,reply,{...delivered,messageId:'q',delivery:'queued'}];
  assert.deepEqual(conversationUsage(events),[{provider:'codex',delivered:1,replies:1},{provider:'unknown',delivered:1,replies:0}]);
 });
+
+test('skill decisions require the authenticated scope, origin and CSRF and do not install a skill',async t=>{
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-skill-consent-'))),app=path.join(dir,'app'),folder=path.join(dir,'project');
+ fs.mkdirSync(folder);fs.mkdirSync(path.join(app,'web'),{recursive:true});
+ fs.writeFileSync(path.join(app,'web/projects.json'),JSON.stringify([{folder,name:'Consent',agentWorkspace:true,chats:[{id:'one'},{id:'two'}]}]));
+ const c=context(folder,null,null,'one');saveRoster(c,[{id:'engineer',name:'Engineer',provider:'codex',level:'worker'}]);
+ const {requestSkill}=await import('../agent-policy.mjs');
+ const row=requestSkill(c,{name:'Demo',source:'https://example.com/skill',version:'abc123',destination:'.agents/skills/demo',reason:'test permission UI'}, {id:'engineer',name:'Engineer'},'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+ const server=createServer({appHome:app,allowedLogin:'owner@example.test',origin:'https://consent.test',core:()=>{throw Error('No model should run');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port+'/api/',identity={'Tailscale-User-Login':'owner@example.test'};
+ const state=await(await fetch(base+'state?chat=two',{headers:identity})).json();assert.equal(state.skillRequests[0].chat,'one');assert.equal(state.skillRequests[0].status,'pending');
+ const body=JSON.stringify({project:state.project,chat:'one',id:row.id,decision:'approve'}),headers={...identity,Origin:'https://consent.test','Content-Type':'application/json'};
+ assert.equal((await fetch(base+'skill-decision',{method:'POST',headers,body})).status,403);
+ headers['X-Herdr-CSRF']=state.csrfToken;assert.equal((await fetch(base+'skill-decision',{method:'POST',headers:{...headers,Origin:'https://wrong.test'},body})).status,403);
+ const result=await(await fetch(base+'skill-decision',{method:'POST',headers,body})).json();assert.equal(result.status,'approved');
+ assert(!fs.existsSync(path.join(folder,'.agents/skills/demo')));assert.equal(fs.readdirSync(path.join(c.teamDir,'direct-queue')).length,1);
+});

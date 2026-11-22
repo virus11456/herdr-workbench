@@ -4,7 +4,11 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v44**（介面版本 `20261122-scroll44`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v44.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v44.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v46**（介面版本 `20261122-policy46`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v46.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v46.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v46 加入 Skill 安裝同意視窗，列出名稱、來源、版本、位置及用途，由你點選「同意這次安裝」或「拒絕」。網路預先授權不包含安裝 Skill。
+
+v45 可直接把圖片或檔案拖到聊天區，放開後加入附件草稿，由你按送出。也可繼續使用迴紋針選檔。
 
 v44 隱藏側欄和聊天區的捲軸，保留滑鼠滾輪、觸控板及鍵盤捲動。
 
@@ -249,3 +253,14 @@ VAPID 私鑰與裝置訂閱只保存在主機本機 `notifications/`，不在 Dr
 以上指令只用於舊總控相容清單。新版直接協作由原交付代理負責驗收，必須已有官方 hook 真實回報及真實終端讀取證據，再附驗收說明；提供檔案證據時會檢查專案範圍與 SHA-256。版本不符、尚未回報、外部檔案或錯誤雜湊都會拒絕。語意是否符合目標仍由原交付代理核對，使用者也應查看實際成果。
 
 既有執行中的總控會在下一次收到任務時取得新版協作提示；不會為更新自動送出任務。
+
+
+### 一般連網與 Skill 安裝
+
+可為已授權的主機啟用一般連網，保留檔案沙箱、既有 deny／ask 規則及登入、付費、系統權限確認。Claude 使用 WebSearch／WebFetch 與沙箱網域設定；Codex 使用 workspace-write 與獨立 network_access 開關及即時搜尋；Google 個人版 Antigravity 使用 read_url／execute_url，保留 --sandbox；MiniMax 只允許原生 web_fetch／web_search，不授權任意 shell 或安裝命令。
+
+一般連網為本機選項，首次安裝預設不開啟。既有主機的 `agent-policy.json` 中 `networkPreapproved` 設為 `true`，重新執行安裝器時會備份後套用對應設定，更新會保留這個選擇。個人的政策、權限、登入資料都不放入公開安裝包。Codex 的網路旗標在下次啟動時套用；更新不會停止正在工作的代理。
+
+每次安裝或更新 Skill 都須獨立同意。代理需先提交固定來源、版本與位置，聊天區會顯示待確認請求並開啟同意視窗。尚未選擇就保留等待；拒絕後代理會收到拒絕結果；同意後只交付該次範圍的授權，代理仍需回報真實安裝結果。此流程是工作台的請求與授權協議，並非可辨識任意 shell 安裝行為的作業系統防護。既有引擎或組織的限制仍可能要求確認。
+
+官方設定依據：[Claude](https://code.claude.com/docs/en/settings-reference.md#sandbox-network-alloweddomains)、[Codex](https://learn.chatgpt.com/docs/agent-approvals-security)、[Antigravity](https://antigravity.google/docs/permissions)、[MiniMax 權限格式](https://github.com/MiniMax-AI/minimax-code/blob/main/packages/local-runtime/src/permissions/rule-codec.ts)。

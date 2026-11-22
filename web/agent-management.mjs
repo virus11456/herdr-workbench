@@ -23,6 +23,7 @@ async function manageUnlocked({source,target,sourceWorkspace,targetWorkspace,age
  if(target&&(roster(target).some(a=>a.id===agentId)||roster(target).length>=24))throw Error('目的專案已有相同代理，或成員數已達上限。');
  const sessions=[];
  for(const c of contexts(source)){
+  if(Object.values(read(path.join(c.teamDir,'skill-requests.json'),{})).some(r=>r.agentId===agentId&&r.status==='pending'))throw Error('這位代理仍有待確認的 Skill 安裝請求，請先同意或拒絕。');
   if((read(path.join(c.teamDir,'checklist.json'),{}).items||[]).some(item=>item.status!=='done'&&[agentId,agent.name].includes(item.owner)))throw Error('這位代理仍有未驗收待辦，請先完成工作。');
   for(const dirName of ['direct-queue','chat-queue']){const dir=path.join(c.teamDir,dirName);if(fs.existsSync(dir)&&fs.readdirSync(dir).filter(n=>n.endsWith('.json')).some(n=>{const q=read(path.join(dir,n),{});return q.agentId===agentId||q.target===agentId;}))throw Error('這位代理還有排隊訊息，請先完成工作。');}
   if(Object.values(read(path.join(c.teamDir,'collaborations.json'),{})).some(j=>!['done','failed'].includes(j.status)&&(j.sourceAgent===agentId||j.targetAgent===agentId)))throw Error('這位代理仍有未完成協作，請先驗收或完成工作。');
