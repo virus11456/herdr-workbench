@@ -26,11 +26,11 @@ export function deploymentPlan(input,tools){
  const port=Number(input.port||48724);if(!Number.isInteger(port)||port<1024||port>65535)throw Error('port 必須為 1024–65535。');
  const cloud=path.join(os.homedir(),'Library/CloudStorage');if(path.resolve(home).startsWith(cloud+path.sep))throw Error('執行控制資料不得存進雲端同步資料夾。');
  let driveRoot=input.driveRoot?validateDriveRoot(input.driveRoot):null;
- const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[]};
+ const config={appHome:home,headless:true,stateRoot:path.join(home,'runtime/projects'),origin:input.origin,allowedLogin:input.login,port,projectRoot:driveRoot||input.projectRoot||path.join(os.homedir(),'HerdrProjects'),driveRoot,legacyProjects:input.legacyProjects||[],projectOrigins:input.projectOrigins||{}};
  config.codexQuotaCli=tools.codex;
  if(tools.mmx)config.miniMaxQuotaCli=tools.mmx;
  const files=[];const add=(target,content,mode=0o600)=>files.push({target,content,mode});
- for(const name of ['package.json','package-lock.json','reply-recovery.mjs','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs','agent-policy.mjs','worker-chat.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
+ for(const name of ['package.json','package-lock.json','reply-recovery.mjs','team-runtime.mjs','provider-usage.mjs','provider-quota.mjs','project-memory.mjs','project-archive.mjs','background.mjs','storage.mjs','checklist.mjs','direct.mjs','agy-reply.mjs','minimax-reply.mjs','agent-policy.mjs','worker-chat.mjs'])add(path.join(home,name),fs.readFileSync(path.join(source,name)));
  const agyHooks=input.antigravityHooks||path.join(os.homedir(),'.gemini/config/hooks.json');let existingHooks={};
  try{existingHooks=JSON.parse(fs.readFileSync(agyHooks,'utf8'));if(!existingHooks||typeof existingHooks!=='object'||Array.isArray(existingHooks))throw Error('Invalid hooks file');}catch(e){if(e.code!=='ENOENT')throw e;}
  add(agyHooks,JSON.stringify({...existingHooks,'herdr-workbench-reply':{Stop:[{type:'command',command:quote(tools.node)+' '+quote(path.join(home,'agy-reply.mjs')),timeout:10}]}},null,2)+'\n');
@@ -93,7 +93,7 @@ async function main(){
  if(flags.has('--help')){console.log('node setup.mjs [--dry-run] [--origin https://host.tailnet.ts.net --login owner@example.com] [--drive-root PATH] [--import-desktop] [--no-start]');return;}
  const existingHome=input.home||path.join(os.homedir(),'.config/herdr-workbench');let previous;try{previous=JSON.parse(fs.readFileSync(path.join(existingHome,'service.json')));}catch{}
  try{input.networkPreapproved=JSON.parse(fs.readFileSync(path.join(existingHome,'agent-policy.json'))).networkPreapproved===true;}catch(e){if(e.code!=='ENOENT')throw e;}
- if(previous){input.origin??=previous.origin;input.login??=previous.allowedLogin;input.port??=previous.port;input.projectRoot??=previous.projectRoot;input.driveRoot??=previous.driveRoot;input.legacyProjects=previous.legacyProjects;}
+ if(previous){input.origin??=previous.origin;input.login??=previous.allowedLogin;input.port??=previous.port;input.projectRoot??=previous.projectRoot;input.driveRoot??=previous.driveRoot;input.legacyProjects=previous.legacyProjects;input.projectOrigins=previous.projectOrigins;}
  if(!input.origin||!input.login){
   if(!process.stdin.isTTY)throw Error('首次設定需提供 --origin 與 --login，或在互動式終端執行 Install.command。');
   const ui=createInterface({input:process.stdin,output:process.stdout});try{input.origin||=(await ui.question('Tailscale HTTPS 網址（不含 /herdr）：')).trim();input.login||=(await ui.question('Tailscale LoginName：')).trim();}finally{ui.close();}

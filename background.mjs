@@ -1,6 +1,7 @@
 import {fileURLToPath} from 'node:url';
 import fs from 'node:fs';import path from 'node:path';import {setTimeout as delay} from 'node:timers/promises';
 import {context,drainProject} from './team-runtime.mjs';
+import {archiveProject} from './project-archive.mjs';
 const read=(file,fallback)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 export function serviceProjects(config){
  const all=read(path.join(config.appHome,'web/projects.json'),[]);
@@ -8,7 +9,7 @@ export function serviceProjects(config){
 }
 export function tick(config,run){
  const projects=serviceProjects(config),results=[];
- for(const p of projects){try{const c=context(p.folder,null,run,null,config);results.push({folder:p.folder,ok:true,conversations:drainProject(c)});}catch(e){results.push({folder:p.folder,ok:false,error:String(e.message).slice(0,500)});}}
+ for(const p of projects){try{const c=context(p.folder,null,run,null,config);let archive;try{archive=archiveProject(c,p,config);}catch(error){archive={status:'error',message:String(error.message).slice(0,200)};}const conversations=drainProject(c);results.push({folder:p.folder,ok:true,conversations,archive});}catch(e){results.push({folder:p.folder,ok:false,error:String(e.message).slice(0,500)});}}
  return results;
 }
 export async function serveQueue(config){

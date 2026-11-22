@@ -1,9 +1,9 @@
 import {hookReplyContext,recoverClaudeReplies} from './reply-recovery.mjs';
-import {agentPolicyPrompt,networkPreapproved} from './agent-policy.mjs';
+import {agentPolicyPrompt,networkPreapproved,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
-import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState,mirrorWorkerReport,settleWorkerTurn,reserveWorkerTurn,launchWorkerMember,reconcileWorkerMembers,withWorkerState,recoverWorkerBinding} from './direct.mjs';
+import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState,mirrorWorkerReport,settleWorkerTurn,reserveWorkerTurn,launchWorkerMember,collaborate,reconcileWorkerMembers,withWorkerState,recoverWorkerBinding} from './direct.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -85,7 +85,7 @@ export function teamBrief(c) {
   return agentPolicyPrompt(c)+'專案協作：使用者交付目標後，你先拆解並判斷應該由誰執行。使用者在文字中點名某位代理或指定分工時，依要求實際派工。未指定人選時，依專案名冊和職責主動派工，需要協作即可用既有代理。單純問候、狀態查詢或簡單問題可直接答覆。點名、分析或選人都不能代替實際送達。專案代理名冊：\n'+JSON.stringify(roster(c))+'\n'+projectMemoryPrompt(c)+
     '你是這段對話的協調入口，不是整個工作台唯一的中介。使用者可直接和每位代理聊天；已加入的代理可依使用者授權，透過工作台在彼此對話交付協作、收取真實回報、退回修正並驗收。不能宣稱所有訊息或代理協作都必須經過你。只處理交付給你的任務，不強制規劃→開發→審查。'+
     '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
-    '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。名冊代理派工使用 runtime request run 的 agentId 欄位，以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
+    '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。既有名冊代理派工使用 runtime request run 的 agentId 欄位；工作台會沿用原代理並排隊，回傳 reused=true、created=false、collaborationId，不能把排隊當送達，也不應因排隊改開新代理。對方忙碌或等確認就等原代理。回報後仍須核對並驗收。真正缺少適任角色才省略agentId建立新角色，提供displayName、creationReason、reviewedAgentIds（列出已比對的所有其他名冊ID）、profile（responsibilities、expertise、deliverables、verification、boundaries五項具體內容，各8–400字且總職責1000字內）；不得用單次影片或任務名稱取代長期角色。以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
     '多步或多代理任務先用 herdr-team-runtime checklist 讀共用清單，再用 request checklist 更新並讀取同 ID response。每項記錄 id/title/owner/status/acceptance/revision；驗收後才標記 done，附 verification 與 evidence（檔案相對路徑及 SHA-256，或同 ID 成功 read response.result 的 JSON SHA-256）。不要以 queued 或代理自稱完成作為驗收。清單依對話保存，接手先續讀，不刪掉未完成項。'+
     '派工時清楚提供任務、工作範圍、產物、驗收、總控回報命令及不得自行啟動其他代理。多位寫入者必須使用獨立 worktree，否則依序寫入。不得自動付費、答覆信任或權限提示。';
 }
@@ -177,7 +177,8 @@ export function context(cwd = process.env.HERDR_TEAM_PROJECT_ROOT || process.cwd
   if (chat && !validChat(chat)) throw new Error('Invalid conversation ID.');
   const root = fs.realpathSync(path.resolve(cwd));
   if(!options)options=process.env.HERDR_WORKBENCH_HOME ? read(path.join(process.env.HERDR_WORKBENCH_HOME,'service.json')) || {} : {};
-  const projectKey=createHash('sha256').update(root).digest('hex'),conversation=chat?['conversations',chat]:[];
+  const origin=options.projectOrigins?.[root];
+  const projectKey=createHash('sha256').update(typeof origin==='string'&&path.isAbsolute(origin)?origin:root).digest('hex'),conversation=chat?['conversations',chat]:[];
   const stateBase=options.stateRoot?path.join(options.stateRoot,projectKey.slice(0,32)):null;
   const teamBase=stateBase&&!options.legacyProjects?.includes(root)?stateBase:path.join(root,'.herdr-team');
   const memoryDir=options.appHome?path.join(options.appHome,'project-memory',projectKey):teamBase;
@@ -279,6 +280,9 @@ export function drainChats(c) {
     }
     const foreground=t?.foreground?.argv || [];
     const shellWithoutAgent=foreground.length && /(?:^|\/)(?:zsh|bash|sh|fish|nu|pwsh)$/.test(foreground[0]) && !t?.status?.app;
+    // A launch may have reached Core even when its response was lost. Do not
+    // interpret an uncertain result (or a process restart mid-launch) as absence.
+    if(control?.launchPending||control?.phase==='startup_uncertain')return{sent:0,pending:files.length,reason:'startup_uncertain',blockedTerminal:control.terminal||null};
     // Leaving a startup/trust dialog is not permission to repeatedly reopen it.
     if(t?.state==='finished'&&!t.status?.app&&control?.phase!=='retry_requested')return{sent:0,pending:files.length,reason:'startup_stopped',blockedTerminal:control.terminal};
     if(!t || t.state==='finished' || (shellWithoutAgent && Date.now()-(control.startedAt||0)>60000)) {
@@ -287,8 +291,18 @@ export function drainChats(c) {
       if(c.chat)argv.push('--team-chat',c.chat);
       if(provider==='codex')argv.push('--team-preferred');
       else if(/^[a-f0-9-]{36}$/.test(control?.sessionId||''))argv.push('--resume',control.sessionId);
-      const made=c.headless ? coreLaunch(c,argv) : c.run('herdr-app',['do','space.new',JSON.stringify({name:path.basename(c.cwd),tab:(provider==='codex'?'Codex':'Claude')+' · 對話總控',folder:c.cwd,argv,focus:false})]);
-      if(!made.terminal)throw new Error('Herdr 沒有回傳總控。');
+      const attempt=randomUUID();
+      save(controlFile,{...control,launchPending:attempt,launchStartedAt:Date.now()});
+      let made;
+      try{
+        made=c.headless ? coreLaunch(c,argv) : c.run('herdr-app',['do','space.new',JSON.stringify({name:path.basename(c.cwd),tab:(provider==='codex'?'Codex':'Claude')+' · 對話總控',folder:c.cwd,argv,focus:false})]);
+        if(!/^t[a-z0-9]+$/.test(made.terminal||''))throw new Error('Herdr 沒有回傳可核對的總控。');
+      }catch{
+        const latest=read(controlFile);
+        if(latest?.phase==='active'&&latest.terminal&&latest.terminal!==control?.terminal)return{sent:0,pending:files.length,reason:'starting'};
+        if(latest?.launchPending===attempt)save(controlFile,{...latest,phase:'startup_uncertain'});
+        return{sent:0,pending:files.length,reason:'startup_uncertain'};
+      }
       const current=read(controlFile);
       if(current?.terminal!==made.terminal)save(controlFile,{...control,terminal:made.terminal,role:provider,phase:'starting',startedAt:Date.now()});
       return{sent:0,pending:files.length,reason:'starting'};
@@ -434,24 +448,23 @@ export function executeRequest(c, req) {
     return {terminals:full.filter(t => owners.includes(t.parent) || owners.includes(t.address || t.id || t.terminal))};
   }
   if (req.action === 'run') {
-    const agent=a.agentId ? roster(c).find(x=>x.id===a.agentId) : null;
+    const members=roster(c),agent=a.agentId ? members.find(x=>x.id===a.agentId) : null;
     if(a.agentId && !agent) throw new Error('Unknown team agent.');
     const template=agent ? workerTemplates[agent.provider] : a.template;
     if (!Object.values(workerTemplates).includes(template)) throw new Error('Unknown worker template.');
     if (!/^[a-z0-9_-]{1,32}$/.test(a.name || '') || typeof a.task !== 'string' || !a.task.trim()) throw new Error('A valid worker name and task are required.');
     const root = fs.realpathSync(c.cwd), cwd = fs.realpathSync(path.resolve(c.cwd, a.cwd || '.'));
     if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error('Worker cwd must remain inside this project.');
-    if(agent&&!(req.id&&read(path.join(teamDir(c),'agent-registrations.json'))?.[req.id])) {
-      for(const [id,binding] of Object.entries(read(path.join(teamDir(c),'direct-bindings.json'))||{})){if(binding.agentId!==agent.id||binding.retired)continue;try{if(directTerminal(c,id)?.t.state==='live')throw new Error('This agent already has a live terminal; inspect or send to it instead of starting a duplicate.');}catch(error){if(!missingTerminal(error))throw error;}}
-      const all=c.run('hc',['ls','--json','--label',`team.agent=${agent.id}`]);
-      const duplicate=(Array.isArray(all)?all:all.terminals||[]).some(t=>{
-        const full=c.run('hc',['get',t.address||t.id||t.terminal]);
-        return full.state==='live'&&([control.terminal,control.previousTerminal].filter(Boolean).includes(full.parent)||!full.parent&&full.labels?.['team.direct']==='true'&&full.cwd===c.cwd||full.labels?.['team.project']===c.cwd);
-      });
-      if(duplicate)throw new Error('This agent already has a live terminal; inspect or send to it instead of starting a duplicate.');
+    const previous=req.id&&read(path.join(teamDir(c),'agent-registrations.json'))?.[req.id];
+    if(agent&&!previous){
+      const job=collaborate({...c,terminal:control.terminal},{action:'delegate',agentId:agent.id,task:a.task,acceptance:a.acceptance||'依本次授權完成任務，回報真實成果、產物位置、驗證及限制。',...(req.id?{requestId:req.id}:{})});
+      return {...job,agentId:agent.id,reused:true,registered:true,created:false,delivery:'queued',collaborationId:job.id};
     }
+    if(!previous&&Object.values(read(path.join(teamDir(c),'agent-registrations.json'))||{}).some(r=>r.status==='pending'&&r.name===a.name))throw Error('原啟動結果尚未核對，不另開代理。');
+    if(!previous&&members.length>=24)throw Error('團隊最多可設定24位代理。');
+    const assessment=previous?null:reviewNewRole(c,a,members,coordinatorProfile(c).agentId||null);
     const provider=Object.keys(workerTemplates).find(key=>workerTemplates[key]===template);
-    return launchWorkerMember(c,{agent,provider,name:a.name,displayName:a.displayName,brief:a.brief,model:a.model,task:a.task,cwd,owner:control.terminal,requestId:req.id},(member,creation)=>{
+    return launchWorkerMember(c,{agent,provider,name:a.name,displayName:a.displayName,brief:assessment?.brief||previous?.brief||a.brief,model:a.model,task:a.task,cwd,owner:control.terminal,requestId:req.id},(member,creation)=>{
       const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
       const command=`herdr-team-runtime${c.chat ? ' --chat '+c.chat : ''} report ${control.terminal} ${quote(member.name)} '<摘要>'`;
       const task=`你是 ${member.name}（${member.id}）。職責：${member.brief}。本次派工者為總控，先完成此項工作並以指定命令回報；使用者之後可在你的對話直接交辦，工作台會依序交付。不得自行啟動其他代理。\n本對話回報命令：${command}；專案根目錄：${c.cwd}；交接資料在 ${teamDir(c)}/。\n${a.task}`;
@@ -520,6 +533,7 @@ export function register(c, role, preferred=false) {
     if (t?.state === 'live' && ((t.status?.app && !['done', 'error'].includes(t.status.state)) || (!t.status?.app && Date.now() - old.startedAt < 60000))) throw new Error('This project already has a coordinator. Use the panel to continue or take over.');
   }
   const state = { ...old, terminal: c.terminal, role, phase: 'active', startedAt: Date.now() };
+  delete state.launchPending;
   save(p.control, state);
   log(c, role, role === 'claude' ? 'Claude 主總控已連線。' : preferred?'Codex 領頭羊已連線。':'Codex 備援總控已連線；先讀交接紀錄再接手。');
   return state;
@@ -593,7 +607,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (cmd === 'route') result = routeMessage(args[0] || '',roster(context()));
     else if (cmd === 'enqueue') result = enqueueChat(context(),args[0]||'');
     else if (cmd === 'drain-project') result = drainProject(context());
-    else if (cmd === 'prompt') {let prompt=fs.readFileSync(0,'utf8');const c=context();prompt=prompt.replaceAll('.herdr-team/',teamDir(c)+'/');if(c.chat)prompt=prompt.replaceAll('herdr-team-runtime ',`herdr-team-runtime --chat ${c.chat} `);if(c.headless)prompt=prompt.replaceAll('面板必須開啟。','背景工作服務必須運作。');process.stdout.write(prompt);result=null;}
+    else if (cmd === 'prompt') {let prompt=fs.readFileSync(0,'utf8');const c=context();prompt=prompt.replaceAll('.herdr-team/',teamDir(c)+'/');if(c.chat)prompt=prompt.replaceAll('herdr-team-runtime ',`herdr-team-runtime --chat ${c.chat} `);if(c.headless)prompt=prompt.replaceAll('面板必須開啟。','背景工作服務必須運作。');process.stdout.write(prompt+'\n'+agentPolicyPrompt(c));result=null;}
     else if(cmd==='state-dir'){const c=context();paths(c);process.stdout.write(c.teamBase+'\n');result=null;}
     else if (cmd === 'register') result = register(context(), args[0],args[1]==='--preferred');
     else if (cmd === 'takeover') result = takeover(context(args[0] || process.cwd(), null), 'user_requested', false);

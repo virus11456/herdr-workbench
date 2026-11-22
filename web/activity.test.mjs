@@ -41,7 +41,7 @@ test('reply indicator never calls queued messages delivered, isolates agents, an
  assert.equal(unconfirmed.phase,'unconfirmed');assert.equal(unconfirmed.text,'已送達 工程師，回覆未核對');assert.equal(unconfirmed.animate,false);
  const answer={...other,target:'engineer'};assert.equal(replyProgress({...base,terminal:done,messages:[user,delivery,answer]}),null);
  assert.equal(replyProgress({...base,terminal:{...terminal,status:{app:'codex',state:'blocked'}},messages:[user,delivery]}).animate,false);
- assert.equal(replyProgress({...base,terminal:{...done,waitingCollaboration:true},messages:[user,delivery,answer]}).phase,'collaboration');
+ assert.equal(replyProgress({...base,terminal:{...done,waitingCollaboration:true},messages:[user,delivery,answer]}),null);
  assert.equal(replyProgress({...base,terminal:{state:'finished'},messages:[user]}).phase,'queued');
 });
 test('a second queued message does not inherit the previous reply or another message delivery',()=>{
@@ -65,4 +65,9 @@ test('a queued follow-up explains an earlier unpaired final reply without preten
  const p=replyProgress({...base,terminal:idle,messages:[user,delivery,second]});assert.equal(p.phase,'queued');assert.equal(p.animate,false);assert.match(p.text,/核對.*上一則回覆/);assert.match(p.reason,/仍在排隊/);
  assert.equal(replyProgress({...base,terminal:idle,messages:[user,delivery]}).phase,'unconfirmed');
  assert.equal(replyProgress({...base,terminal:{...idle,waitingReplyCapture:false},messages:[second]}).text,'等待 工程師 接收');
+});
+
+test('later owner work never restarts the clock of a previously answered direct message',()=>{
+ const answer={kind:'reply',direct:true,target:'engineer',replyTo:user.messageId,time:'2026-11-20T00:00:02Z'};
+ assert.equal(replyProgress({...base,terminal:{...terminal,waitingCollaboration:true},messages:[user,delivery,answer],now:Date.parse(user.time)+375*60000}),null);
 });

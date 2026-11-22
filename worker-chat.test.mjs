@@ -6,7 +6,7 @@ function fixture(t,provider='codex'){
  const c=context(root,null,null,'chat',{headless:true,stateRoot:path.join(root,'private')});fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:owner,role:'claude',phase:'active'}));fs.writeFileSync(path.join(c.teamDir,'worker-bindings.json'),JSON.stringify({[id]:{owner,chat:'chat',name:'Codex',sentAt:Date.now()-20000}}));
  fs.writeFileSync(path.join(c.teamDir,'messages.jsonl'),JSON.stringify({kind:'worker-report',terminal:id,role:'逐字稿員',text:'原本的公開工作回報',time:new Date(Date.now()-60000).toISOString(),reportId:'old-report'})+'\n');
  const terminal=()=>({address:id,cwd:c.cwd,parent:owner,state:exists?'live':'finished',turn,status:{app:provider==='claude'?'claude-code':provider==='minimax'?'mcode':provider,state},labels:{'team.owner':owner,'team.chat':'chat'}});
- c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='get'){if(!exists)throw Object.assign(Error('gone'),{stdout:JSON.stringify({error:{kind:'not_found'}})});return terminal();}if(args[0]==='send'){assert.equal(args[1],id);turn++;return{ok:true};}if(args[0]==='read')return{text:'GPT-6.1-Sol medium · Context 20%'};assert.fail('Unexpected Core mutation '+args[0]);};
+ c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='get'){if(args[1]===owner)return{address:owner,cwd:c.cwd,parent:null,state:'live',status:{app:'claude-code',state:'done'},labels:{}};if(!exists)throw Object.assign(Error('gone'),{stdout:JSON.stringify({error:{kind:'not_found'}})});return terminal();}if(args[0]==='send'){assert.equal(args[1],id);turn++;return{ok:true};}if(args[0]==='read')return{text:'GPT-6.1-Sol medium · Context 20%'};assert.fail('Unexpected Core mutation '+args[0]);};
  return {c,id,owner,calls,terminal,setState:value=>{state=value;},setMissing:()=>{exists=false;}};
 }
 for(const provider of ['codex','claude','antigravity','minimax'])test(`an existing ${provider} child becomes directly chat-capable without creating or relabeling a terminal`,t=>{
@@ -24,7 +24,7 @@ test('user messages wait for the original owner task, whose report remains visib
 test('legacy owner sends cannot interleave with queued or delivered user messages, and cannot start a duplicate adopted agent',t=>{
  const f=fixture(t),adopted=adoptWorkerChat(f.c,f.terminal()),owner={...f.c,terminal:f.owner},send={sender:f.owner,action:'send',args:{terminal:f.id,text:'Owner task'}};
  enqueueDirect(f.c,adopted.agentId,'User first','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');assert.throws(()=>executeRequest(owner,send),/直接訊息/);assert.equal(drainDirect(f.c).sent,1);assert.throws(()=>executeRequest(owner,send),/直接訊息/);
- assert.throws(()=>executeRequest(owner,{sender:f.owner,action:'run',args:{agentId:adopted.agentId,name:'duplicate',task:'Do work'}}),/already has/);assert(!f.calls.some(x=>x[0]==='run'));
+ const reused=executeRequest(owner,{sender:f.owner,action:'run',args:{agentId:adopted.agentId,name:'duplicate',task:'Do work'}});assert(reused.reused);assert.equal(reused.created,false);assert(!f.calls.some(x=>x[0]==='run'));
 });
 test('adoption refuses foreign workers and leaves the roster unchanged',t=>{
  const f=fixture(t);for(const terminal of [{...f.terminal(),cwd:'/other'},{...f.terminal(),parent:'tforeign'},{...f.terminal(),labels:{'team.owner':f.owner,'team.chat':'other'}}])assert.throws(()=>adoptWorkerChat(f.c,terminal),/無法核對/);assert.equal(roster(f.c).length,0);

@@ -11,17 +11,17 @@ function fixture(t,provider='codex'){
   const terminal={address:'tworker',pid:1234,cwd:args[args.indexOf('--cwd')+1],parent:'towner',state:'live',turn:1,status:{app,state:firstSent?'working':'blocked'},labels};terminals.set('tworker',terminal);
   if(lostResponse)throw Error('Core response was lost');return{address:'tworker',first_message:{sent:firstSent}};
  }if(args[0]==='get'){
-  if(failGet)throw Error('Core temporarily unavailable');const terminal=terminals.get(args[1]);if(!terminal)throw Object.assign(Error('not found'),{stdout:JSON.stringify({error:{kind:'not_found'}})});return structuredClone(terminal);
+  if(failGet)throw Error('Core temporarily unavailable');if(args[1]==='towner')return{address:'towner',cwd:c.cwd,state:'live',parent:null,status:{app:'claude-code',state:'done'},labels:{}};const terminal=terminals.get(args[1]);if(!terminal)throw Object.assign(Error('not found'),{stdout:JSON.stringify({error:{kind:'not_found'}})});return structuredClone(terminal);
  }if(args[0]==='ls'){
   const filters=args.flatMap((x,i)=>x==='--label'?[args[i+1]]:[]);return{terminals:[...terminals.values()].filter(t=>filters.every(f=>{const at=f.indexOf('=');return t.labels[f.slice(0,at)]===f.slice(at+1);})).map(t=>({address:t.address}))};
  }if(args[0]==='send'){const t=terminals.get(args[1]);assert(t);t.turn++;t.status.state='working';return{ok:true};}if(args[0]==='read')return{text:'GPT-6.1-Sol medium · Context 20%\n算術結果'};assert.fail('Unexpected Core action '+args[0]);};c.run=run;
  const template={claude:'herdr-claude-task',codex:'herdr-codex-implement',minimax:'herdr-minimax-cn',antigravity:'herdr-antigravity-task'}[provider];
- const req={id:randomUUID(),sender:'towner',action:'run',args:{template,name:'registration-test',displayName:'資料核對員',brief:'依目前任務唯讀核對資料',task:'只計算 10+17，不修改檔案'}};
+ const req={id:randomUUID(),sender:'towner',action:'run',args:{template,name:'registration-test',displayName:'資料核對員',brief:'依目前任務唯讀核對資料',profile:{responsibilities:'獨立計算與比對小型資料，回報真實差異',expertise:'熟悉算術、資料格式與雜湊驗證方法',deliverables:'依本次要求提供可核對數值與具體成果',verification:'逐項核對輸入與輸出，保留真實驗證證據',boundaries:'僅處理本次授權範圍，受阻停止且不擴權'},creationReason:'目前名冊缺少獨立資料核對所需的角色與專業',reviewedAgentIds:[],task:'只計算 10+17，不修改檔案'}};
  return{c,root,home,config,req,provider,calls,terminals,run,setFailGet:v=>failGet=v,setLostResponse:v=>lostResponse=v,setFirstSent:v=>firstSent=v};
 }
 const event=(provider,text,key)=>provider==='claude'?{hook_event_name:'Stop',session_id:key,last_assistant_message:text}:{type:'agent-turn-complete','turn-id':key,'last-assistant-message':text};
 for(const provider of ['claude','codex','minimax','antigravity'])test(`${provider} legacy creation immediately registers one normal chat member, keeps its process, and pairs later direct replies`,t=>{
- const f=fixture(t,provider),made=executeRequest(f.c,f.req);assert(made.registered);assert.equal(made.address,'tworker');assert.equal(roster(f.c).length,1);assert.equal(roster(f.c)[0].name,'資料核對員');assert.equal(roster(f.c)[0].brief,'依目前任務唯讀核對資料');assert.equal(directTerminal(f.c,'tworker').binding.agentId,made.agentId);
+ const f=fixture(t,provider),made=executeRequest(f.c,f.req);assert(made.registered);assert.equal(made.address,'tworker');assert.equal(roster(f.c).length,1);assert.equal(roster(f.c)[0].name,'資料核對員');assert.match(roster(f.c)[0].brief,/專業技能/);assert.equal(directTerminal(f.c,'tworker').binding.agentId,made.agentId);
  assert.equal(executeRequest(f.c,f.req).agentId,made.agentId);assert.equal(f.calls.filter(a=>a[0]==='run').length,1);
  const message=randomUUID();enqueueDirect(f.c,made.agentId,'Answer 12+13',message);assert.equal(drainDirect(f.c).reason,'waiting_owner_task');f.terminals.get('tworker').status.state='done';
  const role={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Antigravity'}[provider];assert(captureReply(event(provider,'10+17=27','owner-turn'),{...f.c,terminal:'tworker'},role).captured);assert.equal(drainDirect(f.c).terminal,'tworker');assert(captureReply(event(provider,'12+13=25','direct-turn'),{...f.c,terminal:'tworker'},role).captured);
@@ -77,19 +77,19 @@ test('MiniMax early native Stop recovers the true worker and preserves its sessi
 
 
 test('manual and delegated members share name validation while unchanged legacy duplicates stay intact',t=>{
- const f=fixture(t);saveRoster(f.c,[{id:'one',name:'核對員',provider:'codex',level:'worker'}]);assert.throws(()=>saveRoster(f.c,[...roster(f.c),{id:'two',name:'核對員',provider:'claude',level:'worker'}]),/同名/);f.req.args.displayName='核對員';assert.throws(()=>executeRequest(f.c,f.req),/同名/);assert(!f.calls.some(a=>a[0]==='run'));
+ const f=fixture(t);saveRoster(f.c,[{id:'one',name:'核對員',provider:'codex',level:'worker'}]);assert.throws(()=>saveRoster(f.c,[...roster(f.c),{id:'two',name:'核對員',provider:'claude',level:'worker'}]),/同名/);f.req.args.displayName='核對員';f.req.args.reviewedAgentIds=['one'];assert.throws(()=>executeRequest(f.c,f.req),/同名/);assert(!f.calls.some(a=>a[0]==='run'));
  fs.writeFileSync(path.join(f.c.teamBase,'roster.json'),JSON.stringify([{id:'one',name:'舊同名',provider:'codex',level:'worker'},{id:'two',name:'舊同名',provider:'claude',level:'worker'}]));saveRoster(f.c,roster(f.c));assert.deepEqual(roster(f.c).map(a=>a.name),['舊同名','舊同名']);
 });
 
 
 test('adding a worker preserves private custom fields on existing members without exposing them as runtime attributes',t=>{
- const f=fixture(t),file=path.join(f.c.teamBase,'roster.json');fs.writeFileSync(file,JSON.stringify([{id:'existing',name:'既有成員',provider:'claude',model:'claude-fable-5-2',level:'worker',brief:'保留職責',localPreference:{color:'cream'}}]));const made=executeRequest(f.c,f.req);assert(made.registered);const existing=read(file).find(a=>a.id==='existing');assert.deepEqual(existing.localPreference,{color:'cream'});assert.equal(existing.model,'claude-fable-5-2');assert.equal(roster(f.c).find(a=>a.id==='existing').localPreference,undefined);
+ const f=fixture(t),file=path.join(f.c.teamBase,'roster.json');fs.writeFileSync(file,JSON.stringify([{id:'existing',name:'既有成員',provider:'claude',model:'claude-fable-5-2',level:'worker',brief:'保留職責',localPreference:{color:'cream'}}]));f.req.args.reviewedAgentIds=['existing'];const made=executeRequest(f.c,f.req);assert(made.registered);const existing=read(file).find(a=>a.id==='existing');assert.deepEqual(existing.localPreference,{color:'cream'});assert.equal(existing.model,'claude-fable-5-2');assert.equal(roster(f.c).find(a=>a.id==='existing').localPreference,undefined);
 });
 
 
 test('legacy launch refuses an existing direct member in another chat instead of creating a duplicate',t=>{
  const f=fixture(t);saveRoster(f.c,[{id:'engineer',name:'工程師',provider:'codex',level:'worker'}]);f.req.args.agentId='engineer';delete f.req.args.template;
- f.terminals.set('totherchat',{address:'totherchat',cwd:f.root,parent:null,state:'live',status:{app:'codex',state:'done'},labels:{'team.direct':'true','team.agent':'engineer','team.chat':'old-chat'}});assert.throws(()=>executeRequest(f.c,f.req),/already has a live/);assert(!f.calls.some(a=>a[0]==='run'));
+ f.terminals.set('totherchat',{address:'totherchat',cwd:f.root,parent:null,state:'live',status:{app:'codex',state:'done'},labels:{'team.direct':'true','team.agent':'engineer','team.chat':'old-chat'}});const old=context(f.root,null,f.run,'old-chat',f.config);fs.mkdirSync(old.teamDir,{recursive:true});fs.writeFileSync(path.join(old.teamDir,'direct-bindings.json'),JSON.stringify({totherchat:{agentId:'engineer',provider:'codex',chat:'old-chat'}}));f.terminals.set('towner',{address:'towner',cwd:f.root,parent:null,state:'live',status:{app:'claude-code',state:'done'},labels:{}});const reused=executeRequest(f.c,f.req);assert(reused.reused);assert(!f.calls.some(a=>a[0]==='run'));assert(fs.readdirSync(path.join(f.c.teamBase,'conversations/old-chat/direct-queue')).some(n=>n.endsWith('.json')));
 });
 
 
@@ -101,4 +101,21 @@ test('new Claude members share the manual Opus default while existing unset pref
 
 test('registration preserves a newly selected engine while the original process is still busy, without launching a duplicate',t=>{
  const f=fixture(t);f.setLostResponse(true);assert.throws(()=>executeRequest(f.c,f.req));const agent=roster(f.c)[0];saveRoster(f.c,roster(f.c).map(a=>({...a,provider:'claude',model:'claude-fable-5-2'})));assert.equal(reconcileWorkerMembers(f.c).registered,1);assert.equal(roster(f.c)[0].provider,'claude');assert.equal(roster(f.c)[0].model,'claude-fable-5-2');assert.equal(directTerminal(f.c,'tworker').binding.provider,'codex');enqueueDirect(f.c,agent.id,'Later work',randomUUID());assert.equal(drainDirect(f.c).reason,'waiting_engine_switch');assert.equal(f.calls.filter(a=>a[0]==='run').length,1);assert(!f.calls.some(a=>a[0]==='kill'));
+});
+
+for(const state of ['working','blocked','done'])test(`existing same-role worker is reused and queues safely while ${state}`,t=>{
+ const f=fixture(t),made=executeRequest(f.c,f.req);f.terminals.get('tworker').status.state='done';captureReply(event('codex','initial done','initial'),{...f.c,terminal:'tworker'},'Codex');f.terminals.get('tworker').status.state=state;
+ const req={id:randomUUID(),sender:'towner',action:'run',args:{agentId:made.agentId,name:'another-task',task:'Reuse the same role for a new task',acceptance:'Return the new verified result'}};const reused=executeRequest(f.c,req);assert(reused.reused);assert.equal(reused.created,false);assert.equal(roster(f.c).length,1);if(state!=='done'){assert.equal(drainDirect(f.c).reason,'agent_not_ready');assert.equal(f.calls.filter(x=>x[0]==='send').length,0);}f.terminals.get('tworker').status.state='done';assert.equal(drainDirect(f.c).terminal,'tworker');assert.equal(f.calls.filter(x=>x[0]==='run').length,1);assert.equal(executeRequest(f.c,req).collaborationId,reused.collaborationId);
+});
+test('new roles require complete expertise and a review of the actual existing roster',t=>{
+ const f=fixture(t);delete f.req.args.profile;assert.throws(()=>executeRequest(f.c,f.req),/profile/);assert.equal(roster(f.c).length,0);assert(!f.calls.some(x=>x[0]==='run'));
+});
+test('a storage move retains the existing private project identity and memory location',t=>{
+ const f=fixture(t),target=path.join(f.root,'cloud-project');fs.mkdirSync(target);const next=context(target,null,f.run,f.c.chat,{...f.config,projectOrigins:{[target]:f.root}});assert.equal(next.teamBase,f.c.teamBase);assert.equal(next.memoryDir,f.c.memoryDir);assert.equal(next.usageDir,f.c.usageDir);assert.notEqual(next.cwd,f.c.cwd);assert.equal(next.privateState,true);
+});
+test('cross-chat legacy delegation returns to its source and never creates a second process',async t=>{
+ const f=fixture(t),made=executeRequest(f.c,f.req);f.terminals.get('tworker').status.state='done';captureReply(event('codex','initial done','initial'),{...f.c,terminal:'tworker'},'Codex');
+ f.terminals.set('towner',{address:'towner',cwd:f.root,parent:null,state:'live',status:{app:'claude-code',state:'done'},labels:{}});const old=context(f.root,null,f.run,'original-chat',f.config);fs.mkdirSync(old.teamDir,{recursive:true});fs.copyFileSync(path.join(f.c.teamDir,'control.json'),path.join(old.teamDir,'control.json'));
+ for(const name of ['direct-bindings.json','worker-bindings.json']){const file=path.join(f.c.teamDir,name),all=read(file),value=all.tworker;value.chat='original-chat';fs.writeFileSync(path.join(old.teamDir,name),JSON.stringify({tworker:value}));fs.writeFileSync(file,'{}');}f.terminals.get('tworker').labels['team.chat']='original-chat';
+ const req={id:randomUUID(),sender:'towner',action:'run',args:{agentId:made.agentId,name:'same-role-next',task:'Same role new task',acceptance:'Return a verified answer'}};const queued=executeRequest(f.c,req);assert(queued.reused);assert.equal(drainDirect(f.c).sent,0);assert.equal(drainDirect(old).terminal,'tworker');captureReply(event('codex','verified next answer','next'),{...old,terminal:'tworker'},'Codex');const file=path.join(f.c.teamDir,'collaborations.json');assert.equal(read(file)[queued.collaborationId].status,'awaiting_review');const {drainCollaboration,collaborate}=await import('./direct.mjs');assert.equal(drainCollaboration(f.c).sent,1);const job=read(file)[queued.collaborationId];collaborate({...f.c,terminal:'towner'},{action:'accept',id:job.id,revision:job.revision,verification:'Verified the actual worker reply and read evidence',evidence:[]});assert.equal(read(file)[job.id].status,'done');assert.equal(executeRequest(f.c,req).status,'done');assert.equal(Object.keys(read(file)).length,1);assert.equal(f.calls.filter(x=>x[0]==='run').length,1);assert.equal(roster(f.c).length,1);assert.equal(read(path.join(old.teamDir,'direct-bindings.json')).tworker.activeJob,undefined);
 });

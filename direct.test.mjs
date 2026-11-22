@@ -24,7 +24,7 @@ for(const [direct,automatic] of [[false,false],[true,false],[false,true],[true,t
   assert.fail('Unexpected Core command: '+verb);
  };
  const current={...c,terminal:leader},jobFile=path.join(c.teamDir,'collaborations.json');
- const request=(name,message=messageId)=>'<herdr-action>'+JSON.stringify({action:'create-agent-and-delegate',messageId:message,name,provider:'codex',brief:'Check small calculations independently',task:'Compute 21+21',acceptance:'Report the result as 42'})+'</herdr-action>';
+ const request=(name,message=messageId)=>'<herdr-action>'+JSON.stringify({action:'create-agent-and-delegate',messageId:message,name,provider:'codex',creationReason:'目前名冊缺少獨立資料核對所需的角色與專業',reviewedAgentIds:roster(c).filter(a=>a.id!==(direct?'engineer':null)).map(a=>a.id),profile:{responsibilities:'獨立計算與比對小型資料，回報真實差異',expertise:'熟悉算術、資料格式與雜湊驗證方法',deliverables:'依本次要求提供可核對數值與具體成果',verification:'逐項核對輸入與輸出，保留真實驗證證據',boundaries:'僅處理本次授權範圍，受阻停止且不擴權'},task:'Compute 21+21',acceptance:'Report the result as 42'})+'</herdr-action>';
  const reply=text=>captureReply({hook_event_name:'Stop',last_assistant_message:text},current,'Claude');
  fs.mkdirSync(c.teamDir,{recursive:true});
  if(direct){
@@ -46,7 +46,7 @@ for(const [direct,automatic] of [[false,false],[true,false],[false,true],[true,t
  reply(request('Replayed request'));
  assert.equal(drainDirect(c).started,worker);
  assert.equal(jobs().length,1);
- assert.match(roster(c).find(a=>a.id===job().targetAgent).brief,/independently/);
+ assert.match(roster(c).find(a=>a.id===job().targetAgent).brief,/專業技能/);
  assert.equal(job().status,'queued');
  assert.equal(drainDirect(c).reason,'agent_not_ready');
  assert.equal(sent.length,1);

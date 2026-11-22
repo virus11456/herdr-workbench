@@ -1,3 +1,4 @@
+import {archiveStatus} from '../project-archive.mjs';
 import {verifiedLegacyWorker} from '../worker-chat.mjs';
 import {workerCandidates,createWorkerObserver} from './legacy-workers.mjs';
 import {skillRequests} from '../agent-policy.mjs';
@@ -21,13 +22,13 @@ import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile,execFileSync} from 'node:child_process';
 import {promisify} from 'node:util';
-import {context,roster,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName,retryStartup,switchAgentModel,appointAgent,switchModel,selectedModel,missingTerminal} from '../team-runtime.mjs';
+import {context,roster,canCreateAgent,saveRoster,enqueueChat,coordinatorProfile,setCoordinatorName,retryStartup,switchAgentModel,appointAgent,switchModel,selectedModel,missingTerminal} from '../team-runtime.mjs';
 const exec=promisify(execFile);
 const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-receipts55',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-workspace56',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -52,7 +53,7 @@ export function createServer(config) {
     for(const p of read(projectFile,[]))if(!all.some(x=>x.folder===p.folder))all.push(p);
     return all.filter(p=>typeof p.folder==='string'&&Array.isArray(p.chats)).map(p=>{
       const chats=[...p.chats];for(const c of extra.filter(c=>c.folder===p.folder))if(!chats.some(x=>x.id===c.id))chats.push(c);
-      const id=projectId(p.folder);
+      const id=/^[a-f0-9]{20}$/.test(p.stableId||'')?p.stableId:projectId(p.folder);
       return {...p,id,category:categories[id]??p.category??'',chats:chats.filter(c=>validChat(c.id))};
     });
   };
@@ -224,7 +225,7 @@ export function createServer(config) {
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'),
       url.searchParams.get('latest')==='1',url.searchParams.get('agent'));
     const picked=summary.find(p=>p.id===choice.p.id);
-    if(picked&&!picked.available)return{...release,accountQuotas,projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname()};
+    if(picked&&!picked.available)return{...release,accountQuotas,projects:summary,project:picked.id,chat:choice.chat,agents:[],messages:[],terminals:[],projectAvailable:false,coreError:'專案儲存位置未就緒，請檢查主機 Drive 登入或資料夾。',appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:{...storageStatus(config),archive:archiveStatus(c)},csrfToken:csrf,host:os.hostname()};
     const {p,chat,c}=selection(choice.p.id,choice.chat);
     const timeline=url.searchParams.get('timeline')==='1'?agentTimeline(p,c,chat,url.searchParams.get('agent'),null,url.searchParams.get('timelineRevision')):null;
     if(!timeline)for(const entry of picked.chats){
@@ -252,7 +253,7 @@ export function createServer(config) {
     const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c),profile=coordinatorProfile(c);
     const name=id=>members.find(a=>a.id===id)?.name||id||profile.name;
     taskList.items.push(...jobs.map(j=>({id:j.id,title:name(j.sourceAgent)+' → '+(j.newAgent?.name||name(j.targetAgent)),owner:name(j.sourceAgent),acceptance:j.acceptance,status:({done:'done',queued:'pending',provisioning:'pending',failed:'blocked'})[j.status]||'in_progress',verification:j.verification,evidence:j.evidence||[]})));
-    const publicJob=(j,bindings,sourceChat)=>({id:j.id,sourceChat,createdAt:j.createdAt,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,targetTerminal:j.targetTerminal,deliveryConfirmed:!!(bindings[j.targetTerminal]?.activeJob===j.id&&bindings[j.targetTerminal]?.delivered),task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)});
+    const publicJob=(j,bindings,sourceChat)=>{const targetBindings=j.targetChat&&j.targetChat!==sourceChat?read(path.join(ctx(p.folder,null,undefined,j.targetChat==='legacy'?null:j.targetChat).teamDir,'direct-bindings.json'),{}):bindings;return{id:j.id,sourceChat,createdAt:j.createdAt,sourceAgent:j.sourceAgent,targetAgent:j.targetAgent,targetName:j.newAgent?.name,targetTerminal:j.targetTerminal,deliveryConfirmed:!!(targetBindings[j.targetTerminal]?.activeJob===j.id&&targetBindings[j.targetTerminal]?.delivered),task:j.task,acceptance:j.acceptance,status:j.status,verification:j.verification,feedback:j.feedback,parentId:j.parentId,artifacts:publicArtifacts(j)};};
     const projectJobs=p.chats.flatMap(entry=>{
       const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);
       const bindings=entry.id===chat?direct:read(path.join(scope.teamDir,'direct-bindings.json'),{});
@@ -305,8 +306,8 @@ export function createServer(config) {
       write(modelFile(p),current);
     }catch{}
     const coordinatorView=terminalViews.find(t=>t.address===owner?.address);
-    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,registrationPendingAgents:pendingRegistrations(c).map(r=>r.agentId),coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>publicJob(j,direct,chat)),projectCollaborations,messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
-      terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
+    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,registrationPendingAgents:pendingRegistrations(c).map(r=>r.agentId),coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupUncertain:!!control?.launchPending||control?.phase==='startup_uncertain',startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>publicJob(j,direct,chat)),projectCollaborations,messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+      terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:{...storageStatus(config),archive:archiveStatus(c)},csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   const streams=new Set();
@@ -493,12 +494,13 @@ export function createServer(config) {
           if(typeof data.text!=='string'||(!data.text.trim()&&data.attachments===undefined)||data.text.length>12000)throw failure('請填寫任務（最多 12000 字），或加入附件。');
           if(typeof data.id!=='string'||!/^[a-f0-9-]{36}$/.test(data.id))throw failure('缺少訊息識別碼。');
           if(data.allowAgentCreation!==undefined&&typeof data.allowAgentCreation!=='boolean')throw failure('新增代理授權無效。');
-          const allowAgentCreation=data.allowAgentCreation??'when-alone';
+          
           const key=p.id+':'+chat+':'+data.id;
           if(lastMessages.has(key)){json(200,lastMessages.get(key));return;}
           // Queue through the existing runtime. This endpoint cannot invoke arbitrary CLI commands.
           const mentioned=roster(c).flatMap(a=>[a.id,a.name].map(alias=>({a,prefix:'@'+alias}))).sort((a,b)=>b.prefix.length-a.prefix.length).find(x=>data.text.startsWith(x.prefix)&&/^[\s：:，,]/.test(data.text.slice(x.prefix.length,x.prefix.length+1)));
           const recipient=mentioned?.a.id||data.agentId;
+          const allowAgentCreation=data.allowAgentCreation??canCreateAgent(c,recipient||null);
           const body=mentioned?data.text.slice(mentioned.prefix.length).replace(/^[\s：:，,]+/,''):data.text;
           const text=await messageWithAttachments(c,data.id,body,data.attachments);
           const result=recipient?enqueueDirect(c,recipient,text,data.id,allowAgentCreation):enqueueChat(c,text,data.id,allowAgentCreation);rememberSelection(p,chat);lastMessages.set(key,result);

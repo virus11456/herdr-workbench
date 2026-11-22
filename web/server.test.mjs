@@ -153,7 +153,7 @@ test('attachment upload stays inside the selected conversation and unchanged ref
  const file=queued.text.match(/- `([^\n`]+)`/)?.[1];
  assert(file?.startsWith('Herdr 附件/'));
  assert.equal(fs.readFileSync(path.join(folder,file),'utf8'),'answer = 42');
- assert.equal(queued.allowAgentCreation,'when-alone');
+ assert.equal(queued.allowAgentCreation,false);
  const query=new URLSearchParams({project,chat:'one'});
  const state=await(await fetch(base+'state?'+query,{headers:identity})).json();
  assert.equal(state.messages.length,1);
@@ -410,4 +410,10 @@ test('adopting a worker opens a normal scoped chat with public history and its o
  const bindingFile=path.join(c.teamDir,'direct-bindings.json'),bindings=JSON.parse(fs.readFileSync(bindingFile));Object.assign(bindings.tworker,{awaitingReply:true,delivered:true,lastMessageId:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'});fs.writeFileSync(bindingFile,JSON.stringify(bindings));
  const observe=async()=>{const v=await(await fetch(base+'state?chat=chat',{headers:identity})).json();return v.terminals.find(t=>t.address==='tworker');};
  let view=await observe();assert.equal(view.waitingReplyCapture,true);assert.equal(view.awaitingReplyMessageId,'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');terminal.status.state='working';view=await observe();assert.equal(view.waitingReplyCapture,false);assert.equal(view.awaitingReplyMessageId,null);terminal.status.state='done';bindings.tworker.awaitingReply=false;fs.writeFileSync(bindingFile,JSON.stringify(bindings));assert.equal((await observe()).waitingReplyCapture,false);
+});
+
+test('moving project files keeps the original URL and private conversation identity',async t=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-storage56-'))),home=path.join(root,'host'),oldFolder=path.join(root,'old'),folder=path.join(root,'drive-project');for(const p of [oldFolder,folder,path.join(home,'web')])fs.mkdirSync(p,{recursive:true});
+ const config={headless:true,appHome:home,stateRoot:path.join(home,'runtime'),projectOrigins:{[folder]:oldFolder},origin:'https://storage56.test',allowedLogin:'owner@example.test',core:args=>{if(args[0]==='ls')return{terminals:[]};throw Error('No real CLI');}},old=context(oldFolder,null,null,'original-chat',config),stable=createHash('sha256').update(oldFolder).digest('hex').slice(0,20);saveRoster(old,[{id:'transcriber',name:'原逐字稿員',provider:'codex',level:'worker',brief:'保留既有職責與專業設定'}]);fs.mkdirSync(old.teamDir,{recursive:true});fs.writeFileSync(path.join(old.teamDir,'messages.jsonl'),JSON.stringify({kind:'user',text:'搬遷前交代的專案記憶',time:new Date().toISOString(),messageId:'old-message'})+'\n');fs.writeFileSync(path.join(home,'web/projects.json'),JSON.stringify([{folder,name:'原股票專案',stableId:stable,chats:[{id:'original-chat'}]}]));
+ const server=createServer(config);await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));fs.rmSync(root,{recursive:true,force:true});});const r=await fetch('http://127.0.0.1:'+server.address().port+'/api/state?project='+stable+'&chat=original-chat',{headers:{'Tailscale-User-Login':'owner@example.test'}}),s=await r.json();assert.equal(r.status,200);assert.equal(s.project,stable);assert.equal(s.agents[0].name,'原逐字稿員');assert(s.messages.some(m=>m.text==='搬遷前交代的專案記憶'));assert(!fs.existsSync(path.join(folder,'.herdr-team')));assert.equal(context(folder,null,null,'original-chat',config).teamDir,old.teamDir);
 });

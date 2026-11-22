@@ -28,7 +28,8 @@ function replyPhase({messages=[],agentId=null,terminal,name='領頭羊',posting=
  const user=messages.findLast(m=>m.kind==='user'&&belongs(m));if(!user||['cancelled','stopped'].includes(taskControls[user.messageId]))return null;
  const delivery=messages.findLast(m=>m.kind==='delivery'&&m.messageId===user.messageId&&m.delivery==='sent');
  const replied=delivery&&messages.some(m=>m.kind==='reply'&&belongs(m)&&(m.replyTo?m.replyTo===user.messageId:Date.parse(m.time)>=Date.parse(delivery.time)));
- if(replied&&!terminal?.waitingCollaboration&&terminal?.status?.state!=='working')return null;
+ // A later owner task must never revive the elapsed clock of an answered chat.
+ if(replied)return null;
  if(terminal?.status?.state==='blocked')return{phase:'blocked',text:`${name} 等待你確認權限`,animate:false};
  if(stopped||terminal?.status?.state==='error'||(terminal?.state==='finished'&&delivery))return{phase:'stopped',text:`${name} 已停止，訊息與對話仍保留`,animate:false};
  if(!delivery){

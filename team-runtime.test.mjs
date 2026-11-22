@@ -44,34 +44,15 @@ test('custom agents route through coordinator with current roster and target met
   const event=JSON.parse(fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim());
   assert.equal(event.target,'planner');
 });
-test('named role chooses its real CLI template and gives the chosen agent a scoped report command',t=>{
-  const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const calls=[];
-  c.run=(cmd,args)=>{calls.push([cmd,args]);if(args[0]==='ls')return {terminals:[]};if(args[0]==='run')return {address:'tunitworker'};throw new Error('unexpected');};
-  const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:'planner',name:'unit-planner',task:'規劃並協調驗收'}});
-  assert.equal(result.address,'tunitworker');
-  const run=calls.find(([,args])=>args[0]==='run')[1];
-  assert(run.includes('herdr-claude-task'));assert(run.includes('team.agent=planner'));
-  assert.match(run.at(-1),/依任務安排協作/);assert.match(run.at(-1),/--chat unit-chat report tunitowner/);
-  assert.match(run.at(-1),/不得自行啟動其他代理/);
+test('a named role is queued for the existing roster identity without an immediate launch',t=>{
+ const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const calls=[];c.run=(_cmd,args)=>{calls.push(args);assert.equal(args[0],'get');return{address:'tunitowner',cwd:c.cwd,state:'live',parent:null,status:{app:'claude-code',state:'done'},labels:{}};};
+ const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:'planner',name:'unit-planner',task:'規劃並協調驗收'}});assert(result.reused);assert.equal(result.created,false);assert.equal(result.delivery,'queued');const job=Object.values(JSON.parse(fs.readFileSync(path.join(c.teamDir,'collaborations.json'))))[0];assert.equal(job.targetAgent,'planner');assert.equal(roster(c).length,3);assert(!calls.some(x=>x[0]==='run'));
 });
-test('foreign callers, escaping folders and duplicate live roles are rejected',t=>{
-  const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());
-  const args={agentId:'developer',name:'unit-developer',task:'測試'};
-  assert.throws(()=>executeRequest(c,{sender:'tunitother',action:'run',args}),/active coordinator/);
-  assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args:{...args,cwd:'..'}}),/inside this project/);
-  c.run=(_cmd,argv)=>argv[0]==='ls'?{terminals:[{address:'tunitworker'}]}:{address:'tunitworker',parent:'tunitowner',state:'live'};
-  assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args}),/already has a live/);
+test('foreign callers, escaping folders and a forged current coordinator are rejected',t=>{
+ const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const args={agentId:'developer',name:'unit-developer',task:'測試'};assert.throws(()=>executeRequest(c,{sender:'tunitother',action:'run',args}),/active coordinator/);assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args:{...args,cwd:'..'}}),/inside this project/);c.run=()=>({address:'tforeign',cwd:c.cwd,parent:'tforeign',state:'live',status:{app:'claude-code',state:'done'}});assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args}),/real registered/);
 });
-test('Google personal agents use Antigravity without starting agents when saved',t=>{
- const {c}=fixture(t);owner(c);
- const member={id:'google-helper',name:'Google helper',provider:'antigravity',level:'worker'};
- assert.equal(saveRoster(c,[member]).started,false);
- assert.equal(routeMessage('@google-helper Review',roster(c)).target,'google-helper');
- const calls=[];c.run=(_cmd,args)=>{calls.push(args);if(args[0]==='ls')return{terminals:[]};if(args[0]==='run')return{address:'tunitgoogle'};throw Error('Unexpected call');};
- executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:member.id,name:'unit-google',task:'Read only review'}});
- const run=calls.find(args=>args[0]==='run');assert(run.includes('herdr-antigravity-task'));
- assert(!run.some(arg=>/--yolo|--skip-trust|--no-sandbox/.test(arg)));
- assert.throws(()=>validateRoster([{...member,id:'antigravity'}]),/唯一/);
+test('Google personal agents are queued by their existing identity without launching on save',t=>{
+ const {c}=fixture(t);owner(c);const member={id:'google-helper',name:'Google helper',provider:'antigravity',level:'worker'};assert.equal(saveRoster(c,[member]).started,false);assert.equal(routeMessage('@google-helper Review',roster(c)).target,'google-helper');c.run=()=>({address:'tunitowner',cwd:c.cwd,parent:null,state:'live',status:{app:'claude-code',state:'done'}});const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:member.id,name:'unit-google',task:'Read only review'}});assert.equal(result.agentId,member.id);assert(result.queued);assert.throws(()=>validateRoster([{...member,id:'antigravity'}]),/唯一/);
 });
 test('worker collaboration report is delivered to the coordinator, not executed as a new agent',t=>{
   const {c}=fixture(t);owner(c);const calls=[];

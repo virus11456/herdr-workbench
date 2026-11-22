@@ -16,6 +16,23 @@ test('background chat starts core directly, waits for idle, and sends the same q
  assert.equal(drainChats(c).reason,'starting');assert.equal(drainChats(c).reason,'working');ready=true;assert.equal(drainChats(c).sent,1);assert.equal(drainChats(c).pending,0);
  assert.equal(calls.filter(([,a])=>a[0]==='run').length,1);assert.equal(calls.filter(([,a])=>a[0]==='send').length,1);assert(!fs.existsSync(path.join(project,'.herdr-team')));
 });
+test('lost launch responses and a restart mid-launch preserve the message without creating duplicate coordinators',t=>{
+ const {root,project}=fixture(t);let launches=0;
+ const c=context(project,null,(_cmd,args)=>{assert.equal(args[0],'run');launches++;throw Error('Core response timed out');},'unit-chat',{headless:true,stateRoot:path.join(root,'private')});
+ const message=enqueueChat(c,'Preserve this message until the real launch is verified');
+ assert.equal(drainChats(c).reason,'startup_uncertain');
+ for(let n=0;n<3;n++)assert.equal(drainChats(c).reason,'startup_uncertain');
+ assert.equal(launches,1);assert(fs.existsSync(path.join(c.teamDir,'chat-queue',message.id+'.json')));
+ const file=path.join(c.teamDir,'control.json'),current=JSON.parse(fs.readFileSync(file));
+ fs.writeFileSync(file,JSON.stringify({...current,phase:undefined}));
+ assert.equal(drainChats(c).reason,'startup_uncertain');assert.equal(launches,1);
+});
+test('a real coordinator registration recovers a lost launch response without a second launch or message loss',t=>{
+ const {root,project}=fixture(t);let launches=0;
+ const config={headless:true,stateRoot:path.join(root,'private')};let c;
+ c=context(project,null,(_cmd,args)=>{if(args[0]==='run'){launches++;register({...c,terminal:'tregistered'},'claude');throw Error('response lost after registration');}if(args[0]==='get')return{address:'tregistered',state:'live',status:{app:'claude-code',state:'idle'}};if(args[0]==='send')return{ok:true};throw Error(args.join(' '));},'unit-chat',config);
+ enqueueChat(c,'Original pending message');assert.equal(drainChats(c).reason,'starting');assert.equal(drainChats(c).sent,1);assert.equal(launches,1);
+});
 test('deployment plan is read-only; apply preserves previous settings and handles quoted paths',t=>{
  const {root,project}=fixture(t),home=path.join(root,"app's home"),bin=path.join(root,'bin');
  const input={home,bin,core:path.join(root,'core'),antigravityHooks:path.join(root,'google/hooks.json'),minimaxHooks:path.join(root,'minimax/hooks.json'),launchAgents:path.join(root,'agents'),origin:'https://unit.tail.test',login:'owner@example.test',projectRoot:project};

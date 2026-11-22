@@ -1,12 +1,12 @@
 import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-chat.mjs';
-import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests} from './agent-policy.mjs';
+import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
 import {roster,saveRoster,validateRoster,validateMembership,coordinatorProfile,canCreateAgent,canProvisionForMessage,log,missingTerminal} from './team-runtime.mjs';
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
 const save=(p,v)=>{fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});const tmp=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(v),{mode:0o600});fs.renameSync(tmp,p);};
 const heldLocks=new Set();
-function withState(c,action,file=path.join(c.teamDir,'direct-state.lock')){
+function withState(c,action,file=path.join(c.teamBase||c.teamDir,'direct-state.lock')){
  if(heldLocks.has(file))return action();fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});let fd;
  for(let i=0;i<400;i++){try{fd=fs.openSync(file,'wx',0o600);fs.writeFileSync(fd,String(process.pid));break;}catch(error){if(error.code!=='EEXIST')throw error;try{const pid=Number(fs.readFileSync(file,'utf8'));if(Number.isInteger(pid)&&pid>0){try{process.kill(pid,0);}catch(e){if(e.code==='ESRCH'){fs.unlinkSync(file);continue;}}}}catch{}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);}}
  if(fd===undefined)throw Error('另一筆代理回報正在保存，請稍後重試。');heldLocks.add(file);try{return action();}finally{heldLocks.delete(file);fs.closeSync(fd);fs.unlinkSync(file);}
@@ -193,7 +193,7 @@ export function launchWorkerMember(c,spec,launch){return withRosterState(c,()=>{
   validateMembership(c,[...members,agent],members);
  }
  registrationBackup(c,[path.join(c.teamBase,'roster.json'),path.join(c.teamBase,'coordinator.json'),registrationsFile(c)]);
- const intent={id:key,requestHash,agentId:agent.id,name:spec.name,memberName:agent.name,task:spec.task,cwd:spec.cwd,provider:spec.provider,owner:spec.owner,chat:c.chat||'legacy',createdAt:Date.now(),status:'pending'};
+ const intent={id:key,requestHash,agentId:agent.id,name:spec.name,memberName:agent.name,brief:spec.brief,task:spec.task,cwd:spec.cwd,provider:spec.provider,owner:spec.owner,chat:c.chat||'legacy',createdAt:Date.now(),status:'pending'};
  all[key]=intent;save(registrationsFile(c),all);if(!spec.agent)saveRoster(c,[...members,agent]);
  let made;
  try{made=launch(agent,key);}catch(error){throw Error('代理已登記，但啟動結果待核對；不會重複開啟。'+error.message);}
@@ -306,20 +306,39 @@ function saveDirectReply(c,text,key,model){
  if(visible)log(c,agent.name,visible,'reply',{agentId:agent.id,target:agent.id,direct:true,replyTo:actual.binding.lastMessageId});
  bindings[c.terminal].captureHashes=[...new Set([...previousHashes,...(actual.binding.captureHash?[actual.binding.captureHash]:[]),hash])].slice(-64);
  bindings[c.terminal].captureHash=hash;bindings[c.terminal].awaitingReply=false;if(typeof model==='string'&&model.length<120)bindings[c.terminal].model=model;
- const active=bindings[c.terminal].activeJob;save(file,bindings);
+ const active=bindings[c.terminal].activeJob,jobScope=chatScope(c,bindings[c.terminal].activeJobChat??c.chat);save(file,bindings);
  const last=actual.binding.lastMessageId;
  const policy=validMessageId(last)&&read(queueFile(c,last,true)+'.sent')?.allowAgentCreation;
  const grant=actual.binding.awaitingReply&&actual.binding.delivered&&canProvisionForMessage(c,agent.id,policy)?last:null;
  handleReplyActions(c,actions,agent,grant,actual.binding.delivered?last:null);
- if(active&&!skillRequests(c).some(r=>r.agentId===agent.id&&r.messageId===last&&r.status==='pending')){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[active],waiting=Object.values(jobs).some(j=>j.id!==active&&(j.parentId===active||(!j.parentId&&j.sourceTerminal===c.terminal&&j.createdAt>=job?.createdAt))&&openJob(j));if(!waiting&&job&&job.targetAgent===agent.id&&job.targetTerminal===c.terminal&&job.status==='working'){job.reply=visible||text;job.status='awaiting_review';job.revision++;job.repliedAt=Date.now();job.notified=false;save(path.join(c.teamDir,'collaborations.json'),jobs);const latest=read(file);delete latest[c.terminal].activeJob;save(file,latest);}}
+ if(active&&!skillRequests(c).some(r=>r.agentId===agent.id&&r.messageId===last&&r.status==='pending')){const jobs=read(path.join(jobScope.teamDir,'collaborations.json'))||{},job=jobs[active],waiting=Object.values(jobs).some(j=>j.id!==active&&(j.parentId===active||(!j.parentId&&j.sourceTerminal===c.terminal&&j.createdAt>=job?.createdAt))&&openJob(j));if(!waiting&&job&&job.targetAgent===agent.id&&job.targetTerminal===c.terminal&&job.status==='working'){job.reply=visible||text;job.status='awaiting_review';job.revision++;job.repliedAt=Date.now();job.notified=false;save(path.join(jobScope.teamDir,'collaborations.json'),jobs);const latest=read(file);delete latest[c.terminal].activeJob;delete latest[c.terminal].activeJobChat;save(file,latest);}}
  return{captured:true,direct:true};
 }
 export function decideSkillRequest(c,args){return withState(c,()=>decideSkill(c,args,(agentId,text,id)=>enqueueDirectLocked(c,agentId,text,id,false)));}
 export function collaborate(c,args){return withState(c,()=>saveCollaboration(c,args));}
+function chatScope(c,chat){
+ if(chat==='legacy'||chat===null)return{...c,chat:null,teamDir:c.teamBase};
+ if(!/^[a-z0-9][a-z0-9-]{0,63}$/.test(chat||''))throw Error('協作對話識別無效。');
+ return{...c,chat,teamDir:path.join(c.teamBase,'conversations',chat)};
+}
+function existingAgentScope(c,agentId){
+ const folder=path.join(c.teamBase,'conversations'),chats=fs.existsSync(folder)?fs.readdirSync(folder).filter(n=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(n)):[];
+ const scopes=[chatScope(c,null),...chats.map(chat=>chatScope(c,chat))],matches=[];
+ for(const scope of scopes){
+  if(pendingRegistrations(scope).some(r=>r.agentId===agentId))throw Error('原代理啟動結果尚未核對，請等待原程序，不另開代理。');
+  for(const [id,b]of Object.entries(read(path.join(scope.teamDir,'direct-bindings.json'))||{})){
+   if(b.retired||b.agentId!==agentId)continue;
+   let actual;try{actual=directTerminal(scope,id);}catch(error){if(missingTerminal(error))continue;throw error;}
+   if(actual?.t.state==='live')matches.push(scope);
+  }
+ }
+ if(matches.length>1)throw Error('同一代理有多個執行中的綁定，請先核對原程序，不增加另一個。');
+ return matches[0]||c;
+}
 function saveCollaboration(c,args,grant){
  const actual=directTerminal(c,c.terminal);
  const file=path.join(c.teamDir,'collaborations.json'),jobs=read(file)||{};
- const legacy=!actual&&args.action!=='delegate'&&c.privateState&&legacyTerminal(c,c.terminal);
+ const legacy=!actual&&legacyTerminal(c,c.terminal);
  const source=actual?roster(c).find(a=>a.id===actual.binding.agentId):legacy?{id:null,name:coordinatorProfile(c).name}:null;
  if(!source)throw Error('Only a real registered agent can collaborate.');
  if(args.action==='create-agent-and-delegate'){
@@ -330,21 +349,25 @@ function saveCollaboration(c,args,grant){
   const task=requiredText(args.task,8000,'請提供具體任務。');
   const acceptance=requiredText(args.acceptance,2000,'請提供可核對的驗收條件。');
   const name=requiredText(args.name,40,'請提供代理名稱。');
-  const brief=requiredText(args.brief,1000,'請提供代理的工作職責。');
+  const assessment=reviewNewRole(c,args,roster(c),source.id),brief=assessment.brief;
   const id=randomUUID();
   const [agent]=validateRoster([{id:'agent-'+id.replaceAll('-','').slice(0,24),name,brief,provider:args.provider,level:'worker'}]);
   jobs[id]={id,parentId:null,sourceAgent:source.id,sourceTerminal:c.terminal,targetAgent:agent.id,task,acceptance,
-   status:'provisioning',revision:1,createdAt:Date.now(),creationMessage:grant,creationPolicy:policy,newAgent:agent};
+   status:'provisioning',revision:1,createdAt:Date.now(),creationMessage:grant,creationPolicy:policy,newAgent:agent,roleAssessment:assessment};
   save(file,jobs);
   return {id,queued:true};
  }
  if(args.action==='delegate'){
   const target=roster(c).find(a=>a.id===args.agentId);if(!target||target.id===source.id)throw Error('協作對象必須是專案中另一位已加入的代理。');
   if(typeof args.task!=='string'||!args.task.trim()||args.task.length>8000||typeof args.acceptance!=='string'||!args.acceptance.trim()||args.acceptance.length>2000)throw Error('協作需要具體任務與驗收條件。');
-  const duplicate=Object.values(jobs).find(j=>j.sourceTerminal===c.terminal&&j.targetAgent===target.id&&j.task===args.task&&j.acceptance===args.acceptance&&j.status!=='done');if(duplicate)return{id:duplicate.id,queued:true,duplicate:true};
+  if(args.requestId!==undefined&&!validMessageId(args.requestId))throw Error('派工請求 ID 無效。');
+  const prior=args.requestId&&Object.values(jobs).find(j=>j.sourceTerminal===c.terminal&&j.requestId===args.requestId);
+  if(prior){if(prior.targetAgent!==target.id||prior.task!==args.task||prior.acceptance!==args.acceptance)throw Error('同一派工請求不可更換內容。');return{id:prior.id,queued:prior.status==='queued',duplicate:true,status:prior.status};}
+  const duplicate=Object.values(jobs).find(j=>j.sourceTerminal===c.terminal&&j.targetAgent===target.id&&j.task===args.task&&j.acceptance===args.acceptance&&openJob(j));if(duplicate)return{id:duplicate.id,queued:true,duplicate:true};
   if(Object.values(jobs).filter(openJob).length>=32)throw Error('請先完成或處理既有協作。');
-  const id=randomUUID(),job={id,parentId:actual.binding.activeJob||null,sourceAgent:source.id,sourceTerminal:c.terminal,targetAgent:target.id,task:args.task,acceptance:args.acceptance,status:'queued',revision:1,createdAt:Date.now()};jobs[id]=job;save(file,jobs);queueCollaboration(c,job);
-  log(c,source.name,`已向 ${target.name} 交付協作，等待實際回報與驗收。`,'progress',{target:source.id,agentId:source.id,direct:true,collaborationId:id});return{id,queued:true};
+  const targetScope=existingAgentScope(c,target.id);
+  const id=randomUUID(),job={id,parentId:actual?.binding.activeJob||null,sourceAgent:source.id,sourceTerminal:c.terminal,targetAgent:target.id,targetChat:targetScope.chat||'legacy',task:args.task,acceptance:args.acceptance,status:'queued',revision:1,createdAt:Date.now(),...(args.requestId?{requestId:args.requestId}:{})};jobs[id]=job;save(file,jobs);queueCollaboration(c,job);
+  log(c,source.name,`已向 ${target.name} 交付協作，等待實際回報與驗收。`,'progress',{...(source.id?{target:source.id,agentId:source.id,direct:true}:{}),collaborationId:id});return{id,queued:true};
  }
  const job=jobs[args.id];if(!job||job.sourceTerminal!==c.terminal||job.sourceAgent!==source.id)throw Error('不能管理其他代理或對話的協作。');
  if(args.revision!==job.revision)throw Error('協作版本已更新，請使用回報提供的最新 revision。');
@@ -366,10 +389,10 @@ function requiredText(value,max,error){
  return value.trim();
 }
 function queueCollaboration(c,job,id=randomUUID()){
- const file=queueFile(c,id,true);
+ const target=chatScope(c,job.targetChat??c.chat),file=queueFile(target,id,true);
  if(fs.existsSync(file)||fs.existsSync(file+'.sent'))return;
- save(file,{id,agentId:job.targetAgent,text:`協作任務：${job.task}\n驗收條件：${job.acceptance}${job.feedback?'\n修正要求：'+job.feedback:''}\n完成後直接用最後回覆說明真實結果、產物路徑與驗證限制，不以排隊當完成。`,collaborationId:job.id,createdAt:Date.now()});
- const source=roster(c).find(a=>a.id===job.sourceAgent);log(c,source?.name||coordinatorProfile(c).name,`協作交付：${job.task}\n驗收條件：${job.acceptance}${job.feedback?'\n修正要求：'+job.feedback:''}`,'collaboration',{target:job.targetAgent,direct:true,collaborationId:job.id});
+ save(file,{id,agentId:job.targetAgent,text:`協作任務：${job.task}\n驗收條件：${job.acceptance}${job.feedback?'\n修正要求：'+job.feedback:''}\n完成後直接用最後回覆說明真實結果、產物路徑與驗證限制，不以排隊當完成。`,collaborationId:job.id,collaborationSourceChat:c.chat||'legacy',createdAt:Date.now()});
+ const source=roster(c).find(a=>a.id===job.sourceAgent);log(target,source?.name||coordinatorProfile(c).name,`協作交付：${job.task}\n驗收條件：${job.acceptance}${job.feedback?'\n修正要求：'+job.feedback:''}`,'collaboration',{target:job.targetAgent,direct:true,collaborationId:job.id});
 }
 function provisionAgents(c){
  const file=path.join(c.teamDir,'collaborations.json'),jobs=read(file)||{};
@@ -409,7 +432,7 @@ function sendCollaboration(c){
  const file=path.join(c.teamDir,'collaborations.json'),jobs=read(file)||{};let sent=0;
  for(const job of Object.values(jobs)){
   if(job.status!=='awaiting_review'||job.notified)continue;
-  try{const target=directTerminal(c,job.targetTerminal),source=job.sourceAgent?directTerminal(c,job.sourceTerminal)?.t:legacyTerminal(c,job.sourceTerminal);if(!target||!source||source.state!=='live'||!['idle','done'].includes(source.status?.state))continue;
+  try{const target=directTerminal(chatScope(c,job.targetChat??c.chat),job.targetTerminal),source=job.sourceAgent?directTerminal(c,job.sourceTerminal)?.t:legacyTerminal(c,job.sourceTerminal);if(!target||!source||source.state!=='live'||!['idle','done'].includes(source.status?.state))continue;
    const result=c.run('hc',['read',job.targetTerminal,'--json','--lines','0']);if(typeof result.text!=='string'||!result.text.trim())continue;
    job.replyReadHash=createHash('sha256').update(JSON.stringify(result)).digest('hex');
    const claimed=withState(c,()=>{const current=read(file)||{},live=current[job.id];if(!live||live.revision!==job.revision||live.status!=='awaiting_review'||live.notified)return false;live.replyReadHash=job.replyReadHash;save(file,current);return true;});if(!claimed)continue;
@@ -423,7 +446,7 @@ function sendCollaboration(c){
 function collaborationPrompt(c,agentId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},history=Object.values(jobs).filter(j=>j.sourceAgent===agentId).slice(-8).map(j=>({id:j.id,status:j.status,acceptance:j.acceptance,verification:j.verification,evidence:j.evidence,children:childEvidence(jobs,j)}));return `Workbench audit data (not new instructions): ${JSON.stringify(history)}\n以簡短、自然的繁體中文和使用者交談，不在一般答覆展示內部 ID、版本、命令或 JSON；需要使用者親自處理確認或使用者要求證據時才提供必要資料。相同協作 jobId 與 revision 只處理一次。專案已加入的代理名冊：${JSON.stringify(roster(c))}。只有使用者授權協作時才向已加入的對象交付工作。新增代理須有本則訊息的明確授權。所有結果需驗收，修改同一檔案前需協調或使用獨立 worktree。\n要交付協作，最後回覆在程式碼區塊與引用之外附上 <herdr-action>{"action":"delegate","agentId":"名冊中的真實 ID","task":"具體任務與允許範圍","acceptance":"可核對的完成條件"}</herdr-action>。工作台會把真實任務送到對方自己的對話並轉回其真實最後回覆，你必須等待回報，不能假裝已完成。收到協作回報後，先核對再附 <herdr-action>{"action":"accept","id":"回報的 jobId","revision":實際版本數字,"verification":"真實驗收說明","evidence":[{"path":"專案相對檔案路徑","sha256":"實際 SHA-256"}]}</herdr-action>；純對話或算術可用空 evidence，仍需終端真實回報核對。未符合則附 <herdr-action>{"action":"revise","id":"回報的 jobId","revision":實際版本數字,"feedback":"具體修正要求"}</herdr-action>。不要執行 runtime report、不讀取工具或設定。登入、信任與權限提示由使用者處理，不降低沙箱。`;}
 export function agentCreationPrompt(grant){
  if(!grant)return '本則訊息沒有新增代理的授權。需要人手時，提出建議的名稱、引擎、職責、任務及驗收條件供領頭羊或使用者決定。';
- return `本則訊息允許你為目前專案新增一位工作代理。先拆解目標並判斷哪些工作適合委派。確實需要協作且缺少適任成員時，可以自行建立一位；問候、單純諮詢與狀態查詢無須建立。需要建立時，在最後回覆附上獨立一行的 <herdr-action>{"action":"create-agent-and-delegate","messageId":"${grant}","name":"代理名稱","provider":"codex","brief":"長期工作職責","task":"本次具體委派及授權範圍","acceptance":"本次可核對的驗收條件"}</herdr-action>。provider 必須是 claude、codex、minimax 或 antigravity。工作台負責建立、交付並轉回事實回報。等收到回報後驗收或要求修正。排隊不代表送達。登入、信任或其他權限由使用者親自確認。`;
+ return `本則訊息允許你為目前專案新增一位工作代理。先拆解目標並判斷哪些工作適合委派。確實需要協作且缺少適任成員時，可以自行建立一位；問候、單純諮詢與狀態查詢無須建立。需要建立時，在最後回覆附上獨立一行的 <herdr-action>{"action":"create-agent-and-delegate","messageId":"${grant}","name":"代理名稱","provider":"codex","creationReason":"說明為何現有角色無法勝任，不能以忙碌或受阻為理由","reviewedAgentIds":["已比對的其他成員ID"],"profile":{"responsibilities":"具體負責範圍與不負責事項","expertise":"所需專業知識與工具技能","deliverables":"應交付的內容與格式路徑","verification":"需要執行的真實驗收方式","boundaries":"授權範圍與受阻時停止規則"},"task":"本次具體委派及授權範圍","acceptance":"本次可核對的驗收條件"}</herdr-action>。provider 必須是 claude、codex、minimax 或 antigravity。工作台負責建立、交付並轉回事實回報。等收到回報後驗收或要求修正。排隊不代表送達。登入、信任或其他權限由使用者親自確認。`;
 }
 export function drainDirect(c){return withState(c,()=>sendDirect(c));}
 function sendDirect(c){
@@ -474,7 +497,7 @@ function sendDirect(c){
    :'這是使用者直接交給你的任務，你應親自執行，依使用者指示才找同專案其他成員協作。';
   const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${agentPolicyPrompt(c)}${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n${t.cwd!==c.cwd?'專案根目錄：'+c.cwd+'；附件及專案相對路徑以此為準。\n':''}本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
   bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
-  if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
+  if(item.collaborationId){const source=chatScope(c,item.collaborationSourceChat??c.chat),jobs=read(path.join(source.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;bindings[id].activeJobChat=source.chat||'legacy';save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(source.teamDir,'collaborations.json'),jobs);}
 
   c.run('hc',['send',id,prompt]);bindings[id].delivered=true;save(file,bindings);save(path.join(c.teamDir,'direct-delivery.json'),{terminal:id,time:Date.now()});fs.renameSync(path.join(dir,item.name),path.join(dir,item.name+'.sent'));log(c,'系統','訊息已直接送到 '+agent.name+'。','delivery',{messageId:item.id,delivery:'sent',target:agent.id,direct:true,provider:agent.provider});return{sent:1,terminal:id};
   }
