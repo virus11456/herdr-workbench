@@ -307,15 +307,30 @@ export function createServer(config) {
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
   const streams=new Set();
-  function watchUpdates(res,c){
+  // Share bounded metadata scans between SSE clients of the same project.
+  // Native filesystem notifications can omit rapid directory/file creation on macOS.
+  const updateStamps=new Map();
+  function updateStamp(c,p){
+    const dirs=p.chats.map(entry=>entry.id==='legacy'?c.teamBase:path.join(c.teamBase,'conversations',entry.id));
+    const files=[path.join(home,'web/projects.json'),path.join(home,'service-status.json'),c.teamBase,path.join(c.teamBase,'conversations'),
+      ...['roster.json','coordinator.json','sidebar.json','checklist.json','project-memory.json'].map(n=>path.join(c.teamBase,n)),
+      ...dirs.flatMap(dir=>[dir,...['messages.jsonl','collaborations.json','direct-bindings.json','control.json','model.json','skill-requests.json','direct-queue'].map(n=>path.join(dir,n))])];
+    const key=JSON.stringify(files),now=Date.now(),cached=updateStamps.get(key);
+    if(cached&&now-cached.at<800)return cached.value;
+    const value=files.map(file=>{try{const st=fs.statSync(file,{bigint:true});return [st.ino,st.size,st.mtimeNs,st.ctimeNs].join(':');}catch(error){return error.code;}}).join('|');
+    updateStamps.delete(key);updateStamps.set(key,{at:now,value});
+    if(updateStamps.size>64)updateStamps.delete(updateStamps.keys().next().value);
+    return value;
+  }
+  function watchUpdates(res,c,p){
     if(streams.size>=64)throw failure('連線數量已達上限，請稍後再試。',429);
-    const watchers=[];let pending,heartbeat,closed=false,lastService='';
+    const watchers=[];let pending,heartbeat,poller,closed=false,lastService='';
     const send=event=>{if(!closed&&!res.writableNeedDrain)res.write('event: '+event+'\ndata: {}\n\n');};
     const changed=()=>{if(!pending)pending=setTimeout(()=>{pending=null;send('change');},100);};
-    const stop=()=>{if(closed)return;closed=true;clearTimeout(pending);clearInterval(heartbeat);for(const watcher of watchers)watcher.close();streams.delete(stop);res.end();};
+    const stop=()=>{if(closed)return;closed=true;clearTimeout(pending);clearInterval(heartbeat);clearInterval(poller);for(const watcher of watchers)watcher.close();streams.delete(stop);res.end();};
     stop.changed=changed;
     const watch=(folder,options,callback)=>{
-      try{const watcher=fs.watch(folder,options,callback);watcher.on('error',stop);watchers.push(watcher);}catch(error){if(error.code!=='ENOENT'){for(const watcher of watchers)watcher.close();throw error;}}
+      try{const watcher=(typeof config.watchFile==='function'?config.watchFile:fs.watch)(folder,options,callback);watcher.on('error',stop);watchers.push(watcher);}catch(error){if(error.code!=='ENOENT'){for(const watcher of watchers)watcher.close();throw error;}}
     };
     let watchRoot=c.teamBase;
     while(!fs.existsSync(watchRoot))watchRoot=path.dirname(watchRoot);
@@ -332,6 +347,8 @@ export function createServer(config) {
     });
     res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'});
     res.flushHeaders();res.setTimeout(0);streams.add(stop);res.on('close',stop);
+    let lastStamp=updateStamp(c,p);
+    poller=setInterval(()=>{const stamp=updateStamp(c,p);if(stamp!==lastStamp){lastStamp=stamp;changed();}},1000);poller.unref();
     send('ready');heartbeat=setInterval(()=>{if(!closed)res.write(': heartbeat\n\n');},15000);heartbeat.unref();
   }
   const server=http.createServer(async(req,res)=>{
@@ -347,7 +364,7 @@ export function createServer(config) {
       if(req.method==='GET'&&route==='/api/events'){
         const {project,chat}=Object.fromEntries(url.searchParams);
         if(!project||!chat)throw failure('缺少即時更新的專案或對話。');
-        const {c}=selection(project,chat);watchUpdates(res,c);return;
+        const {c,p}=selection(project,chat);watchUpdates(res,c,p);return;
       }
       if(req.method==='GET'&&route==='/api/notifications-key'){json(200,{publicKey:push.publicKey()});return;}
       if(req.method==='GET'&&route==='/api/state'){

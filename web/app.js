@@ -481,7 +481,7 @@ function renderTasks(){
  const segments=[[totals.attention,'待處理'],[totals.review,'待驗收'],[totals.active,'執行或排隊'],[totals.verified,'已驗收'],[totals.replied,'已回覆'],[totals.unconfirmed,'回覆未核對']];
  $('task-summary').textContent=['任務進度',...segments.filter(([n])=>n).map(([n,label])=>n+' '+label)].join(' · ');
  if(key===checklistSnapshot)return;checklistSnapshot=key;const open=new Set([...$('task-items').querySelectorAll('details[open]')].map(n=>n.dataset.id));$('task-items').replaceChildren();
- const rank={blocked:0,pending:1,review:2,working:3,queued:4,stopped:5,unconfirmed:6,replied:7,done:8,cancelled:9};
+ const rank={blocked:0,pending:1,review:2,working:3,queued:4,dispatching:5,stopped:6,unconfirmed:7,replied:8,done:9,cancelled:10};
  for(const task of tasks.sort((a,b)=>rank[a.phase]-rank[b.phase])){const row=el('details','progress-card');row.dataset.id=task.id;row.dataset.phase=task.phase;row.open=open.has(task.id);const summary=el('summary'),title=el('span','task-title',task.title.slice(0,140)),badge=el('span','task-badge',taskLabels[task.phase]);summary.append(title,badge);row.append(summary,el('p','task-owner',(task.source?task.source+' → ':'')+task.owner));
   if(task.acceptance)row.append(el('p','','驗收條件：'+task.acceptance));if(task.verification)row.append(el('p','','驗收結果：'+task.verification));if(task.detail)row.append(el('p','',task.detail));
   if(task.phase==='review')row.append(el('p','','代理已回報，等待交付者核對；尚未驗收完成。'));

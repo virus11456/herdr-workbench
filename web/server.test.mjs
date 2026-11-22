@@ -3,12 +3,12 @@ import {saveRoster,context} from '../team-runtime.mjs';
 import {createECDH,createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from './server.mjs';
 
-test('live updates require authenticated registered scope and report file changes without message content',async t=>{
+test('live updates require authenticated registered scope and recover missing filesystem events without message content',async t=>{
  const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-events-'))),app=path.join(dir,'app'),folder=path.join(dir,'project');
  fs.mkdirSync(app);fs.mkdirSync(folder);fs.mkdirSync(path.join(app,'web'));
  fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Events',chats:[{id:'one'}]}]}));
  const c=context(folder,null,null,'one');
- const server=createServer({appHome:app,allowedLogin:'owner@example.test',origin:'https://events.test',core:()=>{throw Error('No agents');}});
+ const server=createServer({appHome:app,allowedLogin:'owner@example.test',origin:'https://events.test',watchFile:()=>({on(){return this;},close(){}}),core:()=>{throw Error('No agents');}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const abort=new AbortController();
  t.after(async()=>{abort.abort();await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
