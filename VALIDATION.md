@@ -16,6 +16,8 @@
 
 桌面故障注入確認：空白JSON唯讀回應可自動重試，連線恢復後錯誤提示清除，草稿與既有訊息保留。POST回應遺失時不自動重送；本人再次送出同一聊天草稿時沿用messageId，實際只留一筆任務。26項桌面流程回歸也通過，沒有手機實機或手機尺寸測試。自動補收目前限已驗證的Claude舊總控路徑；其他引擎沒有宣稱具備相同的歷史補收能力。
 
+v54 公開 ZIP 固定於提交 `55b75aa0128e92141782be352bded2e98abba4d4`，在另一台全新 macOS 15.8.2 arm64／Node.js 24.22.3 雲端機實際安裝。公開 SHA-256、dry-run 無寫入、官方 CLI、兩個 LaunchAgent、四個 Core 範本、loopback、身分／Origin、預設專案、59個安裝檔逐位元比對與包內158項測試全部通過。新恢復模組確實包含於安裝結果；四引擎 wrapper 與 Skill 同意要求保留。沒有個人登入、模型推論、Drive、真實 Tailscale 或實體重開機。[v54 雲端驗收紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45006476734)
+
 ### v53 全新雲端Mac安裝補驗
 
 使用固定提交`3a4e8c6bc20e8ac4cdf714fafa0029205728d35c`的公開v53 ZIP，在全新macOS15.8.2 arm64實際安裝。SHA-256、安裝預覽無寫入、官方CLI、兩個LaunchAgent、四個Core範本、loopback、身分／Origin、預設領頭羊、58個安裝檔比對及包內143項測試全部通過。[成功紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45004825871)
@@ -226,7 +228,7 @@
 
 ### 已驗證版本的乾淨 macOS 安裝
 
-2026-11-22最新一輪已核對**0.8.11-dev-v53**公開ZIP：全新macOS15.8.2 arm64、Node.js24.22.3、官方CLI、兩個背景服務、四個範本及58個安裝檔比對，143項測試通過。[v53執行紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45004825871)
+2026-11-22最新一輪已核對 **0.8.11-dev-v54** 公開 ZIP：全新 macOS 15.8.2 arm64、Node.js 24.22.3、官方 CLI、兩個背景服務、四個範本及59個安裝檔比對，158項測試通過。[v54 執行紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45006476734)。原 v53 成品也通過58檔與143項測試，[v53 紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45004825871)。
 
 先前v52也通過相同範圍的143項測試，[v52紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45000784638)；v42-memory則通過86項測試，[歷史紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/44932391371)。v42初輪漏裝解壓目錄依賴的驗收步驟已修正，後續版本均先安裝鎖定依賴再測試。這些雲端安裝均不包含本人登入、Drive、真實tailnet或實體重開機。
 
@@ -245,7 +247,7 @@ GitHub Actions 使用一台全新 macOS 15.8.2（Apple Silicon）虛擬機。從
 ## 尚需本人操作或其他裝置驗證
 
 - 更多 iPhone／iPad 機型、不同瀏覽器、最大輔助文字級別，以及長時間使用；本次實機操作回報不代表全裝置覆蓋。
-- 新的 macOS 15.8.2（Apple Silicon）雲端機已驗證 v53 公開安裝包和 143 項測試。全新實體 Mac 的本人登入、Drive、Tailscale 跨裝置與重開機仍待驗收。
+- 新的 macOS 15.8.2（Apple Silicon）雲端機已驗證 v54 公開安裝包和 158 項測試。全新實體 Mac 的本人登入、Drive、Tailscale 跨裝置與重開機仍待驗收。
 - 第二次同機重開機的登入後自動恢復已通過；登入前服務、其他網路、不同 macOS 或其他主機仍未驗證。
 - 舊原生 Herdr 與背景 PWA 不是即時雙向鏡像；日常跨裝置使用同一 PWA 對話連結。
 
