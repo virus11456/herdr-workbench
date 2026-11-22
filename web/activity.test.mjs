@@ -1,8 +1,25 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
+import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 const terminal={state:'live',status:{app:'codex',state:'working'}},base={agentId:'engineer',name:'工程師',terminal};
 const user={kind:'user',direct:true,target:'engineer',messageId:'message-1',time:'2026-11-20T00:00:00Z'};
 const delivery={kind:'delivery',delivery:'sent',messageId:'message-1',time:'2026-11-20T00:00:01Z'};
+test('message receipts require the exact message and recipient and follow cancellation or a matched reply',()=>{
+ const receipt=(messages,taskControls={})=>messageReceipt({messageId:user.messageId,agentId:'engineer',messages,taskControls});
+ assert.equal(receipt([]),null);assert.equal(receipt([user]),'queued');assert.equal(receipt([user,delivery]),'sent');
+ const wrong={kind:'reply',direct:true,agentId:'other',replyTo:user.messageId};
+ assert.equal(receipt([user,wrong]),'queued');
+ assert.equal(receipt([user,{...wrong,agentId:'engineer',replyTo:'previous-message'}]),'queued');
+ assert.equal(receipt([user,delivery,{...wrong,agentId:'engineer'}]),'replied');
+ assert.equal(receipt([user,delivery],{[user.messageId]:'cancelled'}),'cancelled');
+ assert.equal(receipt([user,delivery],{[user.messageId]:'stopped'}),'stopped');
+});
+test('leader receipts isolate direct agents, and an old reply cannot finish a later queued message',()=>{
+ const leader={...user,direct:false},reply={kind:'reply',replyTo:user.messageId};
+ assert.equal(messageReceipt({messageId:user.messageId,messages:[leader,delivery,reply]}),'replied');
+ assert.equal(messageReceipt({messageId:user.messageId,messages:[user,delivery,reply]}),null);
+ const next={...user,messageId:'message-2'};
+ assert.equal(messageReceipt({messageId:next.messageId,agentId:'engineer',messages:[user,delivery,next,{...reply,direct:true,target:'engineer'}]}),'queued');
+});
 test('only a ready real CLI gets a green connection light; shells, blocked, error and exited agents stay gray',()=>{
  assert.equal(agentConnected(null),false);assert.equal(agentConnected({state:'live',status:null}),false);
  for(const state of ['working','idle','done'])assert.equal(agentConnected({state:'live',status:{app:'codex',state}}),true);

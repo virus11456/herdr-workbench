@@ -27,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-workerchat49',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-chat50',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -495,7 +495,7 @@ export function createServer(config) {
         }
         throw failure('找不到操作。',404);
       }
-      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/viewport.mjs','/activity.mjs','/tasks.mjs','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
+      if(req.method==='GET'&&['/','/index.html','/style.css','/app.js','/format.mjs','/viewport.mjs','/activity.mjs','/message-list.mjs','/tasks.mjs','/sheep.svg','/shepherd.svg','/manifest.webmanifest','/sw.js','/app-icon.svg','/icon-192.png','/icon-512.png','/apple-touch-icon.png'].includes(route)){
         if(url.pathname==='/herdr'){res.writeHead(302,{Location:'/herdr/'});res.end();return;}
         const name=route==='/'?'index.html':route.slice(1);res.writeHead(200,{'Content-Type':contentTypes[path.extname(name)]});res.end(fs.readFileSync(path.join(root,name)));return;
       }

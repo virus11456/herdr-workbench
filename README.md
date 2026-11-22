@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v49**（介面版本 `20261122-workerchat49`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v49.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v49.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v50**（介面版本 `20261122-chat50`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v50.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v50.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v50 修正已回覆後仍殘留「訊息已排隊」的提示：以同一筆訊息的實際送達與配對回覆更新狀態。長對話改為增量更新，保留未變動的訊息、文字選取及鍵盤焦點；閱讀上方時新訊息不會強制跳到最底。這是前端更新改善，不保證模型推理或網路耗時縮短。[操作說明](docs/USAGE.md#訊息狀態與長對話更新)。
 
 v49 讓臨時工作代理也能直接聊天與接收任務。點選側欄的臨時代理，核對原終端歸屬後會將它登記為一般成員，沿用原本的工作終端並保留公開回報；之後可從同一對話交辦，也可 Pin、改名或管理設定。原領頭羊的工作與直接交辦依序處理，避免互相插話或開出重複代理。[操作與截圖](docs/USAGE.md#臨時工作代理也能直接聊天)。
 

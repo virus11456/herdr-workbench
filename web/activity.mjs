@@ -2,6 +2,17 @@ export function agentConnected(terminal){
  return terminal?.state==='live'&&!!terminal.status?.app&&['idle','done','working'].includes(terminal.status.state);
 }
 
+// A receipt belongs to one exact message and recipient, never to a later turn.
+export function messageReceipt({messageId,agentId=null,messages=[],taskControls={}}){
+ const belongs=m=>agentId?m.direct&&(m.target||m.agentId)===agentId:!m.direct;
+ const user=messages.find(m=>m.kind==='user'&&m.messageId===messageId&&belongs(m));
+ if(!user)return null;
+ if(['cancelled','stopped'].includes(taskControls[messageId]))return taskControls[messageId];
+ if(messages.some(m=>m.kind==='reply'&&m.replyTo===messageId&&belongs(m)))return 'replied';
+ const delivery=messages.findLast(m=>m.kind==='delivery'&&m.messageId===messageId);
+ return delivery?.delivery==='sent'?'sent':'queued';
+}
+
 export function agentActivity(terminal,{pending=false,starting=false}={}){
  if(terminal?.state==='finished')return '';
  if(terminal?.status?.state==='blocked'||terminal?.status?.state==='error')return '';
