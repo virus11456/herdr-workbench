@@ -19,7 +19,7 @@ prompt=$(cat <<'HERDR_TEAM_PROMPT'
 Codex 備援若因沙箱無法使用 hc，不要解除沙箱。改用 herdr-team-runtime request <action> '<JSON參數>'，保存回傳的 id，再以 herdr-team-runtime response <id> 等待 Herdr 面板執行並回傳。可用 action：templates、list、run（既有角色使用 agentId/name/task/acceptance；新角色另外需要 template/displayName/profile/reviewedAgentIds/creationReason）、get/read/wait/send/interrupt（參數 terminal；read 另有 lines；send 另有 text）。只允許目前總控、同一團隊終端與專案內的工作資料夾。request 回傳 queued 不是完成；必須讀 response，逾時先檢查同一個 id，不能盲目重派。面板必須開啟。
 每次實際派工、收到回報及完成階段，執行 herdr-team-runtime log 總控 "簡短真實摘要"，讓協作面板顯示紀錄。請工作代理也用此工具記錄真實回報；不要記錄憑證、隱藏思考或虛構對話。
 派工一律先使用 herdr-team-runtime request run，已有角色提供 agentId、name、task、acceptance；工作台會沿用原對話與程序，忙碌則排隊。不得直接用 hc run 繞過名冊，亦不得因工作不同影片或前一任務受阻而重建相同角色。只有缺少適任角色時，依本回合工作台規則提供完整profile與名冊評估建立新成員。
-派工時直接附完整的 herdr-team-runtime report <總控終端ID> <角色> <摘要> 回報命令（若有 --chat 參數也要保留），不要先執行 command -v、查目錄或尋找工具。單純路由驗收只允許該回報命令，不要為它增加額外命令或讀取設定。
+沿用名冊代理派工時，request run 回應 reporting=official_final_reply_hook，任務只要求自然語言最後回覆；由官方 hook 送回工作台，不附 runtime report 命令、不尋找外部回報工具。只有明確沒有官方 hook 的舊外部流程才另處理回報。收到回覆後仍須核對真實終端並正式驗收，不能把 queued 當完成。
 多個代理需要同時改碼時，先在實際 Git 專案建立不同 worktree；若沒有可用 Git 或開發工具，就採用一次一個寫入者。審查代理預設唯讀。
 使用 hc read/get/send 與 hc wait 收取回報。第一次啟動遇到登入、信任或權限畫面時，交由使用者處理，不能略過。MiniMax 可能沒有 OSC 狀態，不能把安靜當成完成，必須以明確回報和實際產物確認。
 長回報寫入專案內指定檔案，再用 hc send <總控終端 ID> 回傳摘要與路徑。只有實際通過必要驗證才宣告完成。

@@ -46,7 +46,7 @@ test('custom agents route through coordinator with current roster and target met
 });
 test('a named role is queued for the existing roster identity without an immediate launch',t=>{
  const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const calls=[];c.run=(_cmd,args)=>{calls.push(args);assert.equal(args[0],'get');return{address:'tunitowner',cwd:c.cwd,state:'live',parent:null,status:{app:'claude-code',state:'done'},labels:{}};};
- const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:'planner',task:'規劃並協調驗收'}});assert(result.reused);assert.equal(result.created,false);assert.equal(result.delivery,'queued');const job=Object.values(JSON.parse(fs.readFileSync(path.join(c.teamDir,'collaborations.json'))))[0];assert.equal(job.targetAgent,'planner');assert.equal(roster(c).length,3);assert(!calls.some(x=>x[0]==='run'));
+ const result=executeRequest(c,{sender:'tunitowner',action:'run',args:{agentId:'planner',task:'規劃並協調驗收'}});assert(result.reused);assert.equal(result.reporting,'official_final_reply_hook');assert.equal(result.created,false);assert.equal(result.delivery,'queued');const job=Object.values(JSON.parse(fs.readFileSync(path.join(c.teamDir,'collaborations.json'))))[0];assert.equal(job.targetAgent,'planner');assert.equal(roster(c).length,3);assert(!calls.some(x=>x[0]==='run'));
 });
 test('foreign callers, escaping folders and a forged current coordinator are rejected',t=>{
  const {c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const args={agentId:'developer',name:'unit-developer',task:'測試'};assert.throws(()=>executeRequest(c,{sender:'tunitother',action:'run',args}),/active coordinator/);assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args:{...args,cwd:'..'}}),/inside this project/);c.run=()=>({address:'tforeign',cwd:c.cwd,parent:'tforeign',state:'live',status:{app:'claude-code',state:'done'}});assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'run',args}),/real registered/);
@@ -61,4 +61,17 @@ test('worker collaboration report is delivered to the coordinator, not executed 
   c.run=(cmd,args)=>{calls.push([cmd,args]);return {ok:true};};
   assert.equal(drain(c).delivered,1);
   assert.equal(calls.length,1);assert.equal(calls[0][1][0],'send');assert.equal(calls[0][1][1],'tunitowner');
+});
+
+test('a coordinator may read only its assigned, verified direct agent across chats without gaining send or interrupt access',t=>{
+ const {root,c}=fixture(t);owner(c);saveRoster(c,sampleRoster());const target=context(root,null,null,'worker-chat');fs.mkdirSync(target.teamDir,{recursive:true});
+ const bindings=path.join(target.teamDir,'direct-bindings.json');fs.writeFileSync(bindings,JSON.stringify({tassigned:{agentId:'developer',chat:'worker-chat',provider:'codex'}}));
+ const jobs=path.join(c.teamDir,'collaborations.json'),job={sourceTerminal:'tunitowner',targetTerminal:'tassigned',targetAgent:'developer',targetChat:'worker-chat',status:'awaiting_review'};fs.writeFileSync(jobs,JSON.stringify({job}));
+ let wrongFolder=false,wrongLabel=false;const operations=[];
+ c.run=(_cmd,args)=>{operations.push(args[0]);if(args[0]==='get')return{address:'tassigned',cwd:wrongFolder?path.dirname(c.cwd):c.cwd,parent:null,state:'live',labels:{'team.direct':'true','team.agent':wrongLabel?'reviewer':'developer','team.chat':'worker-chat'},status:{app:'codex',state:'done'}};if(args[0]==='read')return{text:'Real assigned answer: 48'};if(args[0]==='wait')return{ready:true};throw Error('No write operations allowed');};
+ for(const action of ['get','read','wait'])assert(executeRequest(c,{sender:'tunitowner',action,args:{terminal:'tassigned'}}));
+ for(const action of ['send','interrupt'])assert.throws(()=>executeRequest(c,{sender:'tunitowner',action,args:{terminal:'tassigned',text:'Do not send'}}),/does not belong/);
+ fs.writeFileSync(jobs,JSON.stringify({job:{...job,sourceTerminal:'tother'}}));assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'read',args:{terminal:'tassigned'}}),/does not belong/);
+ fs.writeFileSync(jobs,JSON.stringify({job}));wrongFolder=true;assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'read',args:{terminal:'tassigned'}}),/Foreign/);wrongFolder=false;wrongLabel=true;assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'read',args:{terminal:'tassigned'}}),/Foreign/);
+ wrongLabel=false;fs.writeFileSync(bindings,'{}');assert.throws(()=>executeRequest(c,{sender:'tunitowner',action:'read',args:{terminal:'tassigned'}}),/does not belong/);assert(!operations.includes('send')&&!operations.includes('interrupt'));
 });

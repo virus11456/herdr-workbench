@@ -88,7 +88,7 @@ export function teamBrief(c) {
     '以下 report／request 規則只適用你從本終端派出的舊版 worker，並不限制其他代理的直接對話。舊版工作代理可用 herdr-team-runtime report <總控ID> <角色> <協作請求與依據> 向自己的派工者回報，派工者必須接收並回覆處理結果；所有模式都不得繞過使用者權限或沙箱。'+
     '啟動 worker 後核對 first_message.sent，若為 false 則交給使用者處理登入或權限、確認狀態後才補送，不得假稱已收到任務。既有名冊代理派工使用 runtime request run 的 agentId 欄位；工作台會沿用原代理並排隊，回傳 reused=true、created=false、collaborationId，不能把排隊當送達，也不應因排隊改開新代理。對方忙碌或等確認就等原代理。回報後仍須核對並驗收。真正缺少適任角色才省略agentId建立新角色，提供displayName、creationReason、reviewedAgentIds（列出已比對的所有其他名冊ID）、profile（responsibilities、expertise、deliverables、verification、boundaries五項具體內容，各8–400字且總職責1000字內）；不得用單次影片或任務名稱取代長期角色。以綁定角色、引擎、回報與側欄狀態；保存同一請求 ID 並讀取 response 的 ok/result，queued 不是成功。'+
     '多步或多代理任務先用 herdr-team-runtime checklist 讀共用清單，再用 request checklist 更新並讀取同 ID response。每項記錄 id/title/owner/status/acceptance/revision；驗收後才標記 done，附 verification 與 evidence（檔案相對路徑及 SHA-256，或同 ID 成功 read response.result 的 JSON SHA-256）。不要以 queued 或代理自稱完成作為驗收。清單依對話保存，接手先續讀，不刪掉未完成項。'+
-    '派工時清楚提供任務、工作範圍、產物、驗收、總控回報命令及不得自行啟動其他代理。多位寫入者必須使用獨立 worktree，否則依序寫入。不得自動付費、答覆信任或權限提示。';
+    '派工時清楚提供任務、工作範圍、產物、驗收及不得自行啟動其他代理。沿用名冊代理的run回應 reporting=official_final_reply_hook 時，對方只用自然語言最後回覆，由官方hook接回並提供終端核對證據；不要在task附runtime report命令，也不要要求讀取外部回報工具。只有明確使用舊版且沒有官方hook的外部流程，才依該流程處理回報。多位寫入者必須使用獨立 worktree，否則依序寫入。不得自動付費、答覆信任或權限提示。';
 }
 export function routeMessage(text, agents = []) {
   const original = String(text).trim();
@@ -459,7 +459,7 @@ export function executeRequest(c, req) {
     const previous=req.id&&read(path.join(teamDir(c),'agent-registrations.json'))?.[req.id];
     if(agent&&!previous){
       const job=collaborate({...c,terminal:control.terminal},{action:'delegate',agentId:agent.id,task:a.task,acceptance:a.acceptance||'依本次授權完成任務，回報真實成果、產物位置、驗證及限制。',...(req.id?{requestId:req.id}:{})});
-      return {...job,agentId:agent.id,reused:true,registered:true,created:false,delivery:'queued',collaborationId:job.id};
+      return {...job,agentId:agent.id,reused:true,registered:true,created:false,delivery:'queued',reporting:'official_final_reply_hook',collaborationId:job.id};
     }
     if(!previous&&Object.values(read(path.join(teamDir(c),'agent-registrations.json'))||{}).some(r=>r.status==='pending'&&r.name===a.name))throw Error('原啟動結果尚未核對，不另開代理。');
     if(!previous&&members.length>=24)throw Error('團隊最多可設定24位代理。');
@@ -479,7 +479,16 @@ export function executeRequest(c, req) {
   if (!/^t[a-z0-9]+$/.test(a.terminal || '')) throw new Error('A local worker terminal is required.');
   const terminal = c.run('hc', ['get', a.terminal]);
   const previousRead = a.terminal === control.previousTerminal && ['get', 'read'].includes(req.action);
-  if (![control.terminal, control.previousTerminal].filter(Boolean).includes(terminal.parent) && a.terminal !== control.terminal && !previousRead) throw new Error('This terminal does not belong to the current team.');
+  let assignedRead=false;
+  if(['get','read','wait'].includes(req.action)){
+    const jobs=Object.values(read(path.join(teamDir(c),'collaborations.json'))||{});
+    for(const job of jobs.filter(j=>j.sourceTerminal===req.sender&&j.targetTerminal===a.terminal&&j.targetAgent&&roster(c).some(member=>member.id===j.targetAgent))){
+      const scope=conversationContexts(c).find(other=>(other.chat||'legacy')===(job.targetChat||c.chat||'legacy'));
+      const verified=scope&&directTerminal(scope,a.terminal);
+      if(verified?.binding.agentId===job.targetAgent){assignedRead=true;break;}
+    }
+  }
+  if (![control.terminal, control.previousTerminal].filter(Boolean).includes(terminal.parent) && a.terminal !== control.terminal && !previousRead&&!assignedRead) throw new Error('This terminal does not belong to the current team.');
   if (req.action === 'get') return terminal;
   if (req.action === 'read') return c.run('hc', ['read', a.terminal, '--json', '--lines', String(Math.max(0, Math.min(80, Number(a.lines) || 0)))]);
   if (req.action === 'wait') return c.run('hc', ['wait', a.terminal, '--timeout', '8']);
