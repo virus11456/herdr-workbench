@@ -5,7 +5,7 @@ import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-agents52';
+const UI_BUILD='20261122-flow53';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -31,7 +31,7 @@ function appendModelLabel(copy,label,currentStatus){
 }
 const compactMode=matchMedia('(max-width:767px), (max-width:1023px) and (max-height:520px)');
 const initialQuery=new URLSearchParams(location.search);
-let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,editing=null,posting=false,navigating=false,revision=0;
+let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.get('chat')},selectedAgent=initialQuery.get('agent'),details=false,editing=null,editingRevision=null,editingProject=null,editingAgent=null,posting=false,navigating=false,revision=0;
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',attentionSnapshot='';
 let olderMessages=[],historyBefore=null,historyLoading=false;
@@ -115,7 +115,7 @@ function renderReplyProgress(){
 }
 setInterval(()=>{if(!document.hidden&&state)renderReplyProgress();},1000);
 const draftKey=(chat=selection.chat)=>`herdr-draft:${selection.project}:${chat}:${selectedAgent||'team'}`;
-const attachmentsByDraft=new Map();
+const attachmentsByDraft=new Map(),attachmentRetries=new Set();
 const attachmentUploads=new WeakMap(),previewUrls=new Map();
 function releaseAttachment(file){const url=previewUrls.get(file);if(url)URL.revokeObjectURL(url);previewUrls.delete(file);attachmentUploads.delete(file);}
 const currentAttachments=()=>attachmentsByDraft.get(draftKey())||[];
@@ -143,7 +143,7 @@ function renderAttachments(){
   remove.onclick=()=>{
    const key=draftKey(),next=files.filter((_,i)=>i!==index);
    releaseAttachment(file);
-   if(next.length)attachmentsByDraft.set(key,next);else attachmentsByDraft.delete(key);
+   if(next.length)attachmentsByDraft.set(key,next);else{attachmentsByDraft.delete(key);attachmentRetries.delete(key);}
    try{localStorage.removeItem(key+':pending');}catch{}
    updateSend();$('add-attachment').focus();
   };
@@ -241,6 +241,7 @@ function updateSend(){
  $('send').disabled=unavailable||(!$('draft').value.trim()&&!currentAttachments().length);
  $('add-attachment').disabled=unavailable;
  $('draft').readOnly=posting||navigating;
+ $('retry-upload').hidden=posting||navigating||!currentAttachments().length||!attachmentRetries.has(draftKey());
  renderAttachments();
  fitDraft();
 }
@@ -278,7 +279,7 @@ async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
   if(previous&&!Object.hasOwn(result,'messages')&&result.project===previous.project&&result.chat===previous.chat&&result.messagesRevision===previous.messagesRevision){
    result.messages=previous.messages;
   }
-  const sameTimeline=previous?.project===result.project&&previous.timeline?.agent===result.timeline?.agent;
+  const sameTimeline=!!previous&&previous.project===result.project&&previous.timeline?.agent===result.timeline?.agent;
   if(sameTimeline&&result.timeline&&!Object.hasOwn(result.timeline,'messages')&&result.timeline.revision===previous.timeline.revision){
    result.timeline=previous.timeline;
   }
@@ -351,7 +352,7 @@ function closeAgentMenu(focus=true){if(!menuContext)return;const button=menuCont
 function openAgentMenu(id,button){closeAgentMenu(false);const a=id==='__coordinator__'?{id,name:state.coordinatorName||'領頭羊'}:state.agents.find(a=>a.id===id);if(!a)return;menuContext={id,button};const menu=$('agent-menu');menu.replaceChildren();
  const item=(text,action,disabled=false,danger=false)=>{const b=el('button','agent-menu-item'+(danger?' danger':''),text);b.type='button';b.setAttribute('role','menuitem');b.disabled=disabled;b.onclick=()=>{closeAgentMenu(false);action();};menu.append(b);};
  const prefs=sidebarPrefs(),pinned=prefs.pinned.includes(id);item(pinned?'取消置頂':'Pin 到頂端',()=>saveSidebar(prefs.order,pinned?prefs.pinned.filter(x=>x!==id):[...prefs.pinned,id],id));
- item('設定',()=>editAgent(a));item('重新命名',()=>{$('rename-error').textContent='';$('rename-name').value=a.name;$('rename-form').dataset.agent=id;$('rename-dialog').showModal();$('rename-name').focus();});
+ item('設定',()=>editAgent(a));item('重新命名',()=>{$('rename-error').textContent='';$('rename-name').value=a.name;$('rename-form').dataset.agent=id;$('rename-form').dataset.revision=state.rosterRevision;$('rename-form').dataset.project=selection.project;$('rename-dialog').showModal();$('rename-name').focus();});
  item('移至其他專案…',()=>openAgentAction(id,'move'),protectedAgent(id)||state.coordinatorAgentId===id||state.projects.length<2);
  const group=visibleAgentIds().filter(x=>prefs.pinned.includes(x)===pinned),position=group.indexOf(id);menu.append(el('div','menu-divider'));item('向上移動',()=>stepAgent(id,-1),position<=0);item('向下移動',()=>stepAgent(id,1),position>=group.length-1);
  menu.append(el('div','menu-divider'));item(protectedAgent(id)?'領頭羊不能刪除':'刪除代理…',()=>openAgentAction(id,'delete'),protectedAgent(id)||state.coordinatorAgentId===id,true);
@@ -377,6 +378,7 @@ function renderNav(){
  if(menuContext)return;
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control,state?.coordinatorPreferredModel,state?.pendingAgents,state?.sidebar]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;closeAgentMenu(false);
  const nav=$('members');nav.replaceChildren();const query=$('search').value.toLocaleLowerCase().trim();
+ const matchesAgent=a=>`${a.name} ${providerName(a.provider)}`.toLocaleLowerCase().includes(query);
  for(const project of state?.projects||[]){const group=el('div','project-group'),members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')} ${(project.temporaryWorkers||[]).map(w=>w.name+' '+providerName(w.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
   const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'+((project.temporaryWorkers||[]).length?' · '+project.temporaryWorkers.length+' 位工作代理':'')));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理，'+(project.temporaryWorkers||[]).length+' 位臨時工作代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id);
   caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};
@@ -386,9 +388,9 @@ function renderNav(){
   edit.onclick=()=>openProjectEditor(project.id);
   titleRow.append(caption,edit);group.append(titleRow);if(project.id!==selection.project){
    const preview=[...(!project.agentWorkspace?[{id:null,name:project.coordinatorName||'領頭羊',provider:project.coordinatorProvider||'claude',model:project.coordinatorPreferredModel}]:[]),...members];
-   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}appendTemporaryWorkers(group,project,query);nav.append(group);continue;
+   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a||query&&!project.name.toLocaleLowerCase().includes(query)&&!matchesAgent(a))continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}appendTemporaryWorkers(group,project,query);nav.append(group);continue;
   }
-  for(const id of visibleAgentIds()){const a=id==='__coordinator__'?null:members.find(a=>a.id===id);if(id!=='__coordinator__'&&!a)continue;const lead=!a,name=a?.name||state.coordinatorName||'領頭羊',t=a?terminalFor(a):state.terminals.find(t=>t.address===state.control?.terminal),activity=activityFor(a,t),active=lead?!selectedAgent:selectedAgent===id;
+  for(const id of visibleAgentIds()){const a=id==='__coordinator__'?null:members.find(a=>a.id===id);if(id!=='__coordinator__'&&!a)continue;if(query&&!project.name.toLocaleLowerCase().includes(query)&&!matchesAgent(a||{name:state.coordinatorName||'領頭羊',provider:state.coordinatorProvider||'claude'}))continue;const lead=!a,name=a?.name||state.coordinatorName||'領頭羊',t=a?terminalFor(a):state.terminals.find(t=>t.address===state.control?.terminal),activity=activityFor(a,t),active=lead?!selectedAgent:selectedAgent===id;
    const profile=a||{provider:t?.provider||state.coordinatorProvider||'claude',model:state.coordinatorPreferredModel};
    const label=modelLabel(profile,t,project.lastModels?.[id]),currentStatus=!t&&a&&state.pendingAgents?.includes(a.id)?'啟動中':sidebarStatus(profile,t);
    const row=el('div','member'+(active?' active':'')+(sidebarPrefs().pinned.includes(id)?' pinned':''));row.dataset.agent=id;row.draggable=true;
@@ -400,6 +402,7 @@ function renderNav(){
   }
   appendTemporaryWorkers(group,project,query);nav.append(group);
  }
+ if(query&&!nav.childElementCount)nav.append(el('div','project-summary','找不到符合的專案或代理，請換個關鍵字。'));
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
 }
 function renderAttention(){
@@ -606,7 +609,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v52`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v53`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -717,7 +720,7 @@ $('composer').onsubmit=async e=>{
   const delivered=await api('message',{text,id:pending.id,attachments,
    allowAgentCreation:pending.allowAgentCreation,...(agent?{agentId:agent.id}:{})},scope);
   try{localStorage.removeItem(pendingKey);localStorage.removeItem(key);}catch{}
-  attachmentsByDraft.delete(key);for(const file of files)releaseAttachment(file);
+  attachmentsByDraft.delete(key);attachmentRetries.delete(key);for(const file of files)releaseAttachment(file);
   if(draftKey()===key){
    $('draft').value='';
    if(delivered.direct&&delivered.target!==selectedAgent){selectedAgent=delivered.target;restoreDraft();}
@@ -727,7 +730,7 @@ $('composer').onsubmit=async e=>{
    pendingReceiptNotice={...scope,agentId:selectedAgent||null,messageId:pending.id,name:to,sent:delivered.status==='sent'};
   }
   await refresh();
- }catch(error){notice(error.message);$('retry-upload').hidden=!files.length;}
+ }catch(error){if(files.length)attachmentRetries.add(key);notice(error.message);}
  finally{posting=false;updateSend();renderReplyProgress();scheduleRefresh();}
 };
 $('search').oninput=renderNav;
@@ -735,7 +738,7 @@ $('sidebar-toggle').onclick=()=>{if(matchMedia('(max-width:760px)').matches)docu
 $('details-toggle').onclick=()=>{$('team-dialog').close();details=!details;$('details-toggle').textContent=details?'一般對話':'詳細紀錄';render();};
 function editAgent(agent=null){
  if(!state?.project){notice('請先建立工作專案。');return;}
- editing=agent?.id||null;
+ editing=agent?.id||null;editingRevision=state.rosterRevision;editingProject=selection.project;editingAgent=agent?{...agent}:null;
  const coordinator=editing==='__coordinator__';
  $('agent-dialog').querySelector('h2').textContent=coordinator?'領頭羊設定':agent?'代理設定':'新增代理';
  for(const label of $('agent-dialog').querySelectorAll('label')){
@@ -760,6 +763,8 @@ function editAgent(agent=null){
 $('manage-team').onclick=openTeam;$('edit-agent').onclick=()=>editAgent(currentAgent()||{id:'__coordinator__',name:state?.coordinatorName||'領頭羊'});
 $('close-dialog').onclick=$('cancel-dialog').onclick=()=>$('agent-dialog').close();
 async function saveAgent(remove=false){
+ if(editingProject!==selection.project||editingRevision!==state.rosterRevision)throw Error('代理設定已在其他畫面更新。請保留目前輸入，關閉後重新開啟設定再核對。');
+ let expectedRevision=editingRevision;
  if(editing==='__coordinator__'){
   const provider=$('agent-provider').value,model=$('agent-model').value;
   let message='領頭羊設定已保存。';
@@ -770,9 +775,9 @@ async function saveAgent(remove=false){
   $('agent-dialog').close();notice(message);await refresh();return;
  }
  const a={id:editing||'agent-'+crypto.randomUUID().slice(0,12),name:$('agent-name').value.trim(),group:$('agent-group').value.trim(),brief:$('agent-brief').value.trim(),provider:$('agent-provider').value,level:state.agents.find(a=>a.id===editing)?.level||'worker'};
- let modelMessage='';if(!remove&&a.provider==='claude'){a.model=editing?$('agent-model').value:'claude-opus-5-5';const old=state.agents.find(x=>x.id===a.id);if(old?.provider==='claude'&&a.model!==(old.model||'claude-opus-5-5')){const result=await api('agent-model',{agentId:a.id,model:a.model});modelMessage=result.message;await refresh();}}
- const agents=state.agents.filter(x=>x.id!==a.id);if(!remove)agents.push(a);
- await api('roster',{agents,rosterRevision:state.rosterRevision});selectedAgent=remove?null:a.id;$('agent-dialog').close();notice(modelMessage||'代理設定已保存。');await refresh();restoreDraft();
+ let modelMessage='';if(!remove&&a.provider==='claude'){a.model=editing?$('agent-model').value:'claude-opus-5-5';const old=state.agents.find(x=>x.id===a.id);if(old?.provider==='claude'&&a.model!==(old.model||'claude-opus-5-5')){const result=await api('agent-model',{agentId:a.id,model:a.model});modelMessage=result.message;await refresh();const current=state.agents.find(x=>x.id===a.id);if(!current||['name','group','brief','provider','level'].some(key=>(current[key]||'')!==(editingAgent[key]||'')))throw Error('模型已更新，但其他代理設定同時變動。請關閉後重新核對；未覆寫其他設定。');expectedRevision=state.rosterRevision;}}
+ const agents=remove?state.agents.filter(x=>x.id!==a.id):editing?state.agents.map(x=>x.id===a.id?a:x):[...state.agents,a];
+ await api('roster',{agents,rosterRevision:expectedRevision});persistDraft();selectedAgent=remove?null:a.id;$('agent-dialog').close();notice(modelMessage||'代理設定已保存。');await refresh();restoreDraft();
 }
 $('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('agent-save-error').textContent='';try{await saveAgent();}catch(error){$('agent-save-error').textContent=error.message;}finally{b.disabled=false;}};
 $('remove-agent').onclick=async()=>{try{await saveAgent(true);}catch(e){notice(e.message);}};
@@ -796,9 +801,9 @@ window.addEventListener('pageshow',refreshForeground);
 window.addEventListener('pagehide',()=>{updates?.close();updates=null;updatesKey='';updatesReady=false;});
 refresh().finally(scheduleRefresh);
 
-$('new-project').onclick=()=>{$('project-name').value='';$('project-dialog').showModal();};
+$('new-project').onclick=()=>{$('project-name').value='';$('project-create-error').textContent='';$('project-dialog').showModal();};
 $('project-cancel').onclick=()=>$('project-dialog').close();
-$('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await api('project',{name:$('project-name').value.trim()});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){notice(error.message);}finally{button.disabled=false;}};
+$('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;$('project-create-error').textContent='';try{const result=await api('project',{name:$('project-name').value.trim()});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){$('project-create-error').textContent=error.message;}finally{button.disabled=false;}};
 
 $('hero-sheep').append(avatar('claude'));
 $('search-toggle').onclick=()=>{const show=$('search-wrap').hidden;$('search-wrap').hidden=!show;if(show)$('search').focus();else{$('search').value='';renderNav();}};
@@ -898,7 +903,11 @@ $('project-memory-form').onsubmit=async event=>{
  }catch(error){$('project-memory-result').textContent=error.message;}
  finally{button.disabled=false;}
 };
-function openTeam(){
+async function openTeam(){
+ const button=$('manage-team');if(button.disabled)return;button.disabled=true;
+ try{
+ await refresh();
+ if($('team-dialog').open)return;
  renderUsage();
  $('maintenance-section').hidden=!state?.project;
  $('maintenance-issue').value='';$('maintenance-result').textContent='';
@@ -909,10 +918,11 @@ function openTeam(){
  $('project-memory-result').textContent='';
  const drive=state?.drive;
  $('storage-status').textContent=drive?.status==='configured'?'Google Drive 資料夾已設定；雲端上傳狀態由 Drive 桌面版確認。':drive?.status==='needs_login'?'Google Drive 需要重新登入，原檔已保留。':'Google Drive 未連線：請先在主機完成官方桌面版登入。';
- $('storage-folder').value=drive?.folder||'';
+ $('storage-folder').value=drive?.folder||'';$('storage-result').textContent='';
  $('storage-form').hidden=state?.backendMode!=='background';
 
  renderOtherDrafts();$('other-drafts').open=false;$('team-dialog').showModal();
+ }finally{button.disabled=false;}
 }
 $('team-close').onclick=()=>$('team-dialog').close();
 
@@ -946,7 +956,7 @@ if('serviceWorker' in navigator && location.protocol==='https:') {
 
 fitDraft();
 
-$('storage-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('storage',{folder:$('storage-folder').value.trim()});await refresh();notice('已設定新專案的 Drive 資料夾；雲端同步請查看 Drive 桌面版。');$('storage-status').textContent='Google Drive 資料夾已設定；雲端同步請查看 Drive 桌面版。';}catch(error){notice(error.message);}finally{b.disabled=false;}};
+$('storage-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('storage-result').textContent='';try{await api('storage',{folder:$('storage-folder').value.trim()});await refresh();notice('已設定新專案的 Drive 資料夾；雲端同步請查看 Drive 桌面版。');$('storage-status').textContent='Google Drive 資料夾已設定；雲端同步請查看 Drive 桌面版。';$('storage-result').textContent='儲存位置已保存。';}catch(error){$('storage-result').textContent=error.message;}finally{b.disabled=false;}};
 
 $('copy-layout').onclick=async()=>{
  const text=JSON.stringify(layoutDiagnostics(window,document),null,2);
@@ -964,10 +974,10 @@ $('agent-provider').onchange=()=>{
  $('agent-model-observed').textContent=provider==='codex'?'Codex 使用主機 CLI 設定的模型。':'最近使用的模型會在引擎回覆後顯示。';
 };
 
-$('appoint-agent').onclick=async()=>{try{const result=await api('appoint',{agentId:editing});$('agent-dialog').close();selectedAgent=editing;notice('已任命協調者，使用 '+providerName(result.provider)+'。');await refresh();}catch(error){$('agent-save-error').textContent=error.message;}};
+$('appoint-agent').onclick=async()=>{const button=$('appoint-agent');button.disabled=true;try{if(editingProject!==selection.project||editingRevision!==state.rosterRevision)throw Error('代理設定已在其他畫面更新，請重新開啟後再任命。');const result=await api('appoint',{agentId:editing});persistDraft();$('agent-dialog').close();selectedAgent=editing;restoreDraft();notice('已任命協調者，使用 '+providerName(result.provider)+'。');await refresh();}catch(error){$('agent-save-error').textContent=error.message;}finally{button.disabled=state.coordinatorAgentId===editing;}};
 
 $('rename-cancel').onclick=()=>$('rename-dialog').close();
-$('rename-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const id=e.currentTarget.dataset.agent,name=$('rename-name').value.trim();if(id==='__coordinator__')await api('coordinator',{name});else await api('roster',{rosterRevision:state.rosterRevision,agents:state.agents.map(a=>a.id===id?{...a,name}:a)});$('rename-dialog').close();await refresh();notice('名稱已保存。');}catch(error){$('rename-error').textContent=error.message;}finally{b.disabled=false;}};
+$('rename-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{if(e.currentTarget.dataset.project!==selection.project)throw Error('專案已切換，請重新開啟名稱設定。');const id=e.currentTarget.dataset.agent,name=$('rename-name').value.trim();if(id==='__coordinator__')await api('coordinator',{name});else await api('roster',{rosterRevision:e.currentTarget.dataset.revision,agents:state.agents.map(a=>a.id===id?{...a,name}:a)});$('rename-dialog').close();await refresh();notice('名稱已保存。');}catch(error){$('rename-error').textContent=error.message;}finally{b.disabled=false;}};
 $('agent-action-cancel').onclick=()=>$('agent-action-dialog').close();
 $('agent-action-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const {agent:agentId,action}=e.currentTarget.dataset;await api('agent-manage',{agentId,action,targetProject:action==='move'?$('move-target').value:undefined,rosterRevision:state.rosterRevision});$('agent-action-dialog').close();if(selectedAgent===agentId){persistDraft();selectedAgent=null;restoreDraft();}await refresh();notice(action==='move'?'代理已轉移；原對話與檔案保留。':'代理設定已刪除；原對話與檔案保留。');}catch(error){$('agent-action-error').textContent=error.message;}finally{b.disabled=false;}};
 document.addEventListener('pointerdown',e=>{if(menuContext&&!e.target.closest('#agent-menu')&&!e.target.closest('.member-more'))closeAgentMenu(false);});

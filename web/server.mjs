@@ -27,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-agents52',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-flow53',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -505,7 +505,7 @@ export function createServer(config) {
         }
         if(route==='/api/roster'){
           const result=withRosterState(c,()=>{
-            if(data.rosterRevision!==undefined&&data.rosterRevision!==rosterRevision(c))throw failure('Agent settings changed; reload before saving.',409);
+            if(data.rosterRevision!==undefined&&data.rosterRevision!==rosterRevision(c))throw failure('代理設定已在其他畫面更新，請重新開啟設定後再保存。',409);
             if(roster(c).some(a=>!data.agents?.some(b=>b.id===a.id)))throw failure('請由代理的 ⋯ 選單移除設定，以核對執行中工作。');
             return saveRoster(c,data.agents);
           });

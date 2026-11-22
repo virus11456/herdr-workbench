@@ -4,9 +4,11 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v52**（介面版本 `20261122-agents52`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v52.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v52.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v53**（介面版本 `20261122-flow53`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v53.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v53.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
 
-[目前完成與待辦](docs/CHECKLIST.md)：最近四項改進已完成；v52 公開安裝包另通過全新 macOS 雲端安裝及 143 項測試。尚待真正 iPhone 附件驗收（依要求暫緩）、另一台實體 Mac 的本人登入與恢復驗收，以及可對應回合的官方實付費用資料。
+v53 重跑桌面完整流程，修正首次空白專案誤判離線、代理設定改變排序、任命後草稿對象錯置、搜尋未篩代理，表單錯誤藏在視窗後方，以及附件重試按鈕跨代理殘留的問題。設定與改名保留開啟時的版本，拒絕覆寫另一頁的新資料；開設定前更新記憶快照，已輸入的內容仍保留。[恢復與衝突處理教學](docs/USAGE.md#操作失敗或其他畫面已更新)。
+
+[目前完成與待辦](docs/CHECKLIST.md)：最近四項改進已完成；v52 公開安裝包曾通過全新 macOS 雲端安裝及 143 項測試；v53 另做桌面完整流程驗收。尚待真正 iPhone 附件驗收（依要求暫緩）、另一台實體 Mac 的本人登入與恢復驗收，以及可對應回合的官方實付費用資料。
 
 v52 統一代理建立流程：手動新增、新版派工及舊版 runtime 派工都使用同一份成員名冊。新派工代理建立時即可直接聊天、Pin、改名及管理設定；可核對的舊工作代理會自動補登記，沿用原終端與公開回報。既有模型、職責與本機自訂設定保留；啟動結果不明時先核對，避免重複開啟。[建立與交辦教學](docs/USAGE.md#代理建立流程統一)。
 
