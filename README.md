@@ -4,7 +4,11 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v53**（介面版本 `20261122-flow53`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v53.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v53.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v54**（介面版本 `20261122-recovery54`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v54.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v54.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v54 修正 CLI 切入子資料夾後答案落到錯誤對話的問題：回覆以真實 Core 與已登記綁定決定歸屬。已產生但漏接的 Claude 舊總控回覆，可在來源與原訊息核對後自動補收，不重送任務或重播操作。網頁遇到不完整回應會保留對話及草稿、重試唯讀查詢，送出操作不會自動重播。[回覆恢復說明](docs/USAGE.md#回覆漏接與連線恢復)。
+
+v53 公開安裝包已在全新 macOS 15.8.2 arm64 雲端機完成實際安裝、58個安裝檔比對及143項測試，[完整紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45004825871)。此結果只對應固定的v53成品；v54的回覆修正另有158項回歸與真實子資料夾回覆驗收。
 
 v53 重跑桌面完整流程，修正首次空白專案誤判離線、代理設定改變排序、任命後草稿對象錯置、搜尋未篩代理，表單錯誤藏在視窗後方，以及附件重試按鈕跨代理殘留的問題。設定與改名保留開啟時的版本，拒絕覆寫另一頁的新資料；開設定前更新記憶快照，已輸入的內容仍保留。[恢復與衝突處理教學](docs/USAGE.md#操作失敗或其他畫面已更新)。
 

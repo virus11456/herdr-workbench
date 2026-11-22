@@ -1,3 +1,4 @@
+import {hookReplyContext,recoverClaudeReplies} from './reply-recovery.mjs';
 import {agentPolicyPrompt,networkPreapproved} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
@@ -312,7 +313,7 @@ export function drainChats(c) {
   }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
 export function drainProject(c) {
-  return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,...drain(x),directQueue:drainDirect(x),collaborationQueue:drainCollaboration(x),chatQueue:drainChats(x)}));
+  return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,recovery:recoverClaudeReplies(x),...drain(x),directQueue:drainDirect(x),collaborationQueue:drainCollaboration(x),chatQueue:drainChats(x)}));
 }
 const usageProvider={Claude:'claude',Codex:'codex',Antigravity:'antigravity',MiniMax:'minimax'};
 export function captureReply(event, c, role, usageSource) {
@@ -575,13 +576,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (['help', '--help', '-h'].includes(cmd)) result = { usage: 'herdr-team-runtime register claude|codex; report <coordinator-id> <role> <summary>; checklist; request <action> <json>; response <id>; log <role> <summary>; drain; takeover <project>' };
     else if (cmd === 'hook') {
       const event = JSON.parse(fs.readFileSync(0, 'utf8'));
-      result = handleFailure(event, context(event.cwd || process.cwd()));
+      const c=hookReplyContext(event,context());result=c?handleFailure(event,c):{captured:false,reason:'unregistered_hook_context'};
     } else if (cmd === 'reply') {
       const event = JSON.parse(fs.readFileSync(0,'utf8'));
-      result = captureReply(event, context(event.cwd || process.cwd()), 'Claude');
+      const c=hookReplyContext(event,context());result=c?captureReply(event,c,'Claude'):{captured:false,reason:'unregistered_hook_context'};
     } else if (cmd === 'codex-notify') {
       const event = JSON.parse(args[0] || '{}');
-      result = captureReply(event, context(event.cwd || process.cwd()), 'Codex');
+      const c=hookReplyContext(event,context());result=c?captureReply(event,c,'Codex'):{captured:false,reason:'unregistered_hook_context'};
     } else if (cmd === 'network-enabled') {process.stdout.write(networkPreapproved()?'true\n':'false\n');result=null;}
     else if (cmd === 'model-id') { process.stdout.write(selectedModel(context()) + '\n'); result = null; }
     else if (cmd === 'switch-model') result = await switchModel(context(), args[0]);

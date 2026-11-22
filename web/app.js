@@ -5,7 +5,7 @@ import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-flow53';
+const UI_BUILD='20261122-recovery54';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -259,9 +259,22 @@ function renderReceiptNotice(){
  if(['replied','cancelled','stopped'].includes(receipt))pendingReceiptNotice=null;
 }
 async function api(route,data,scope=selection){
- const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...scope,...data}):undefined});
- const result=await response.json();if(!response.ok)throw Error(result.error||'連線失敗');return result;
+ for(let attempt=0;attempt<(data?1:2);attempt++){
+  try{
+   const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...scope,...data}):undefined});
+   const text=await response.text();let result;
+   try{result=JSON.parse(text);if(!result||typeof result!=='object')throw Error();}
+   catch{throw Object.assign(Error(data?'主機回應不完整，操作結果尚未確認。請先檢查目前狀態後再重試。':'主機回應不完整，正在重新連線。'),{transient:true});}
+   if(!response.ok)throw Error(result.error||'連線失敗');return result;
+  }catch(error){
+   const transient=error.transient||error instanceof TypeError;
+   if(!data&&!attempt&&transient){await new Promise(resolve=>setTimeout(resolve,200));continue;}
+   if(error instanceof TypeError)throw Error('連線暫時中斷，請確認主機與 Tailscale。');
+   throw error;
+  }
+ }
 }
+let stateConnectionError=false;
 async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
  const switching=scope!==selection,n=++revision,q=new URLSearchParams();
  q.set('timeline','1');
@@ -298,11 +311,12 @@ async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
   if(selectedAgent)link.searchParams.set('agent',selectedAgent);else link.searchParams.delete('agent');
   if(recordHistory&&link.href!==location.href)history.pushState(null,'',link);
   else history.replaceState(null,'',link);
+  if(stateConnectionError){stateConnectionError=false;if(!pendingReceiptNotice)$('notice').textContent='';}
   render();
   connectUpdates();
   if(first){restoreDraft();$('feed').scrollTop=$('feed').scrollHeight;}
   return true;
- }catch(e){if(n===revision){notice(e.message);$('status').textContent='主機離線，請檢查 Tailscale';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
+ }catch(e){if(n===revision){stateConnectionError=true;$('notice').textContent='暫時無法更新，保留目前對話並自動重新連線。';$('status').textContent='連線暫時中斷，正在重新連線';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
 }
 function switchAgent(id,focusDraft=true){persistDraft();selectedAgent=id;const link=new URL(location.href);if(id)link.searchParams.set('agent',id);else link.searchParams.delete('agent');history.replaceState(null,'',link);restoreDraft();render();document.body.classList.remove('show-sidebar');refresh();if(focusDraft)$('draft').focus();}
 async function switchChat(project,chat=null,agent=null,recordHistory=true){
@@ -609,7 +623,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v53`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v54`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
