@@ -3,6 +3,39 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 const filename=c=>path.join(c.memoryDir||c.teamBase,'project-memory.json');
+const historyIndexes=new Map();
+function historyRow(line,index){
+ let row;try{row=JSON.parse(line);}catch{return null;}
+ const time=Date.parse(row?.time);
+ if(!['user','reply'].includes(row?.kind)||typeof row.text!=='string'||!Number.isFinite(time))return null;
+ return {row,index,time,owner:row.direct?(row.target||row.agentId):'__coordinator__'};
+}
+function historyRows(file){
+ const stat=fs.statSync(file),cached=historyIndexes.get(file);
+ if(cached&&cached.ino===stat.ino&&cached.size===stat.size&&cached.mtime===stat.mtimeMs)return cached.view;
+ const append=cached&&cached.ino===stat.ino&&stat.size>cached.size;
+ const start=append?cached.size:0,rows=append?[...cached.rows]:[];
+ const buffer=Buffer.alloc(stat.size-start),fd=fs.openSync(file,'r');
+ try{
+  let offset=0;
+  while(offset<buffer.length){const count=fs.readSync(fd,buffer,offset,buffer.length-offset,start+offset);if(!count)break;offset+=count;}
+ }finally{fs.closeSync(fd);}
+ const bytes=append?Buffer.concat([cached.tail,buffer]):buffer;
+ const last=bytes.lastIndexOf(10),complete=last<0?'':bytes.subarray(0,last).toString('utf8');
+ let index=append?cached.lines:0;
+ for(const line of complete.split('\n')){
+  if(last<0)break;
+  const position=index++;if(!line)continue;
+  const parsed=historyRow(line,position);if(parsed)rows.push(parsed);
+ }
+ const tail=bytes.subarray(last+1),tailRow=historyRow(tail.toString('utf8'),index),view=tailRow?[...rows,tailRow]:rows;
+ if(stat.size<=8*1024*1024){
+  historyIndexes.delete(file);
+  historyIndexes.set(file,{ino:stat.ino,size:stat.size,mtime:stat.mtimeMs,rows,view,lines:index,tail});
+  if(historyIndexes.size>16)historyIndexes.delete(historyIndexes.keys().next().value);
+ }else historyIndexes.delete(file);
+ return view;
+}
 export function projectMemory(c){
  try{return JSON.parse(fs.readFileSync(filename(c),'utf8'));}
  catch(error){if(error.code==='ENOENT')return{revision:0,text:''};throw error;}
@@ -24,9 +57,9 @@ export function saveProjectMemory(c,{revision,text}){
 }
 
 export function projectMemoryPrompt(c){
- const {text}=projectMemory(c);
+ const {text,revision}=projectMemory(c);
  if(!text)return '';
- return '\n使用者已保存的專案背景與偏好（JSON 字串）。依本次任務採用相關內容；任何登入、授權、付款或變更範圍均須依本次指示確認。\n'+JSON.stringify(text)+'\n';
+ return '\n使用者目前保存的專案背景與偏好（版本 '+revision+'，JSON 字串）。這是最新保存的決策，與歷史片段衝突時優先使用本版本，並指出差異；本次使用者明確指示優先。任何登入、授權、付款或變更範圍均須依本次指示確認。\n'+JSON.stringify(text)+'\n';
 }
 
 export function conversationHistoryPrompt(c,agentId,query=''){
@@ -48,14 +81,10 @@ export function conversationHistoryPrompt(c,agentId,query=''){
   /[\p{Script=Han}]/u.test(term)?Array.from({length:term.length-1},(_,i)=>term.slice(i,i+2)):[term]));
  const records=[];
  for(const {chat,file}of files){
-  for(const [index,line]of fs.readFileSync(file,'utf8').split('\n').entries()){
-   if(!line)continue;
-   let row;try{row=JSON.parse(line);}catch{continue;}
-   const owner=row?.direct?(row.target||row.agentId):'__coordinator__';
-   if(owner!==agentId||!['user','reply'].includes(row.kind)||typeof row.text!=='string')continue;
+  for(const {row,index,time,owner}of historyRows(file)){
+   if(owner!==agentId)continue;
    if(row.kind==='user'&&row.messageId&&['cancelled','stopped'].some(suffix=>
     fs.existsSync(path.join(path.dirname(file),row.direct?'direct-queue':'chat-queue',row.messageId+'.json.'+suffix))))continue;
-   const time=Date.parse(row.time);if(!Number.isFinite(time))continue;
    const text=row.text.toLowerCase(),score=[...terms].reduce((total,term)=>total+Number(text.includes(term)),0);
    records.push({chat,time,index,kind:row.kind,text:row.text,score});
   }

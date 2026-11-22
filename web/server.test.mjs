@@ -3,6 +3,29 @@ import {saveRoster,context} from '../team-runtime.mjs';
 import {createECDH,randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from './server.mjs';
 
+test('live updates require authenticated registered scope and report file changes without message content',async t=>{
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-events-'))),app=path.join(dir,'app'),folder=path.join(dir,'project');
+ fs.mkdirSync(app);fs.mkdirSync(folder);fs.mkdirSync(path.join(app,'web'));
+ fs.writeFileSync(path.join(app,'shared.json'),JSON.stringify({'team-chat.projects':[{folder,name:'Events',chats:[{id:'one'}]}]}));
+ const c=context(folder,null,null,'one');
+ const server=createServer({appHome:app,allowedLogin:'owner@example.test',origin:'https://events.test',core:()=>{throw Error('No agents');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const abort=new AbortController();
+ t.after(async()=>{abort.abort();await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+server.address().port+'/api/';const identity={'Tailscale-User-Login':'owner@example.test'};
+ const s=await(await fetch(base+'state?chat=one',{headers:identity})).json();
+ const route=base+'events?'+new URLSearchParams({project:s.project,chat:'one'});
+ assert.equal((await fetch(route)).status,403);
+ assert.equal((await fetch(route,{headers:{...identity,Origin:'https://wrong.test'}})).status,403);
+ assert.equal((await fetch(base+'events?project=foreign&chat=one',{headers:identity})).status,404);
+ const response=await fetch(route,{headers:identity,signal:abort.signal});assert.match(response.headers.get('content-type'),/text\/event-stream/);
+ const reader=response.body.getReader(),decoder=new TextDecoder();let data=decoder.decode((await reader.read()).value);assert(data.includes('event: ready'));
+ fs.mkdirSync(c.teamDir,{recursive:true});fs.appendFileSync(path.join(c.teamDir,'messages.jsonl'),'PRIVATE-MESSAGE-CONTENT\n');
+ const timeout=setTimeout(()=>abort.abort(),3000);
+ while(!data.includes('event: change'))data+=decoder.decode((await reader.read()).value);
+ clearTimeout(timeout);assert(!data.includes('PRIVATE-MESSAGE-CONTENT'));await reader.cancel();
+});
+
 test('opening an agent finds its newest active chat while explicit history links stay pinned',async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-recent-unit-'));
  const app=path.join(dir,'app'),project=path.join(dir,'project');

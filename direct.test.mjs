@@ -239,3 +239,20 @@ test('cross-chat memory supplies scoped history at actual delivery and prioritiz
  assert(prompt.includes('\\u003cherdr-action>'));assert(prompt.includes('不得重新執行'));
  assert.equal(fs.readFileSync(path.join(old.teamDir,'messages.jsonl'),'utf8'),rows.map(JSON.stringify).join('\n')+'\n');
 });
+
+test('history index reuses unchanged bytes, reads appended Unicode correctly and resets after replacement',async t=>{
+ const {conversationHistoryPrompt}=await import('./project-memory.mjs');
+ const {c,root}=fixture(t),other=context(root,null,null,'older',{headless:true,stateRoot:path.join(root,'private')});
+ fs.mkdirSync(other.teamDir,{recursive:true});const file=path.join(other.teamDir,'messages.jsonl');
+ const event=text=>JSON.stringify({direct:true,target:'engineer',kind:'user',time:'2026-11-22T00:00:00Z',text});
+ fs.writeFileSync(file,event('old rule')+'\n');assert(conversationHistoryPrompt(c,'engineer','rule').includes('old rule'));
+ const original=fs.readSync;let bytes=0;fs.readSync=(fd,buffer,offset,length,position)=>{bytes+=length;return original(fd,buffer,offset,length,position);};
+ try{
+  assert(conversationHistoryPrompt(c,'engineer','rule').includes('old rule'));assert.equal(bytes,0);
+  const next=Buffer.from(event('新決策：草原318')+'\n');const split=next.indexOf(Buffer.from('草'))+1;
+  fs.appendFileSync(file,next.subarray(0,split));conversationHistoryPrompt(c,'engineer','決策');
+  fs.appendFileSync(file,next.subarray(split));const updated=conversationHistoryPrompt(c,'engineer','決策');assert(updated.includes('草原318'));assert(!updated.includes('�'));
+  assert(bytes<=next.length);
+  fs.writeFileSync(file,event('replacement'));const replaced=conversationHistoryPrompt(c,'engineer','replacement');assert(replaced.includes('replacement'));assert(!replaced.includes('old rule'));
+ }finally{fs.readSync=original;}
+});

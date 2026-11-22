@@ -24,7 +24,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-agent42',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-live43',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -268,7 +268,7 @@ export function createServer(config) {
       const stored=observed?.terminal===t.address&&observed.confirmedAt?observed.model:binding?.model||configured;
       const footer=ready&&provider!=='claude'?await readFooter(t,provider):null;
       const model=validModel(footer)?footer:validModel(stored)?stored:null;
-      return {address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,parked:t.address===owner?.address&&coordinatorParked,
+      return {address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,observedAt:t.status_ms||null,parked:t.address===owner?.address&&coordinatorParked,
         agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&!['done','failed'].includes(j.status)),
         direct:directTerm,provider,model,modelObserved:!!(verified&&model)};
     }));
@@ -291,16 +291,46 @@ export function createServer(config) {
       terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
+  const streams=new Set();
+  function watchUpdates(res,c){
+    if(streams.size>=64)throw failure('連線數量已達上限，請稍後再試。',429);
+    const watchers=[];let pending,heartbeat,closed=false,lastService='';
+    const send=event=>{if(!closed&&!res.writableNeedDrain)res.write('event: '+event+'\ndata: {}\n\n');};
+    const changed=()=>{if(!pending)pending=setTimeout(()=>{pending=null;send('change');},100);};
+    const stop=()=>{if(closed)return;closed=true;clearTimeout(pending);clearInterval(heartbeat);for(const watcher of watchers)watcher.close();streams.delete(stop);res.end();};
+    stop.changed=changed;
+    const watch=(folder,options,callback)=>{
+      try{const watcher=fs.watch(folder,options,callback);watcher.on('error',stop);watchers.push(watcher);}catch(error){if(error.code!=='ENOENT'){for(const watcher of watchers)watcher.close();throw error;}}
+    };
+    let watchRoot=c.teamBase;
+    while(!fs.existsSync(watchRoot))watchRoot=path.dirname(watchRoot);
+    watch(watchRoot,{recursive:true},(_event,name)=>{
+      if(name&&path.resolve(watchRoot,String(name)).startsWith(c.teamBase+path.sep)&&/\.(jsonl?|sent|cancelled|stopped)$/.test(String(name)))changed();
+    });
+    watch(path.join(home,'web'),{},(_event,name)=>{if(name&&String(name).endsWith('.json'))changed();});
+    watch(home,{},(_event,name)=>{
+      if(String(name)!=='service-status.json')return;
+      try{const service=read(path.join(home,'service-status.json'),{}),key=JSON.stringify([service.pid,service.stopped,service.results]);if(key!==lastService){lastService=key;changed();}}catch{}
+    });
+    res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'});
+    res.flushHeaders();res.setTimeout(0);streams.add(stop);res.on('close',stop);
+    send('ready');heartbeat=setInterval(()=>{if(!closed)res.write(': heartbeat\n\n');},15000);heartbeat.unref();
+  }
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
-    const json=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    const json=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));if(req.method==='POST'&&status<300)for(const stop of streams)stop.changed();};
     try {
       const url=new URL(req.url,'http://localhost'),route=url.pathname.replace(/^\/herdr(?=\/|$)/,'')||'/';
       if(route==='/health'&&req.method==='GET'){json(200,{ok:true});return;}
       // Only a localhost Tailscale Serve proxy can reach this listener. Serve strips client-supplied identity headers.
       if(req.headers['tailscale-user-login']!==config.allowedLogin)throw failure('請從你本人已登入 Tailscale 的裝置開啟此連結。',403);
       if(req.headers.origin && req.headers.origin!==config.origin)throw failure('不允許的來源。',403);
+      if(req.method==='GET'&&route==='/api/events'){
+        const {project,chat}=Object.fromEntries(url.searchParams);
+        if(!project||!chat)throw failure('缺少即時更新的專案或對話。');
+        const {c}=selection(project,chat);watchUpdates(res,c);return;
+      }
       if(req.method==='GET'&&route==='/api/notifications-key'){json(200,{publicKey:push.publicKey()});return;}
       if(req.method==='GET'&&route==='/api/state'){
         refreshCodex();refreshMiniMax();
@@ -459,6 +489,8 @@ export function createServer(config) {
     }catch(e){json(e.status||400,{error:e.status?e.message:'操作失敗，請重新整理或查看主機紀錄。'});}
   });
   const timer=setInterval(()=>push.tick(async({project,chat})=>state(new URL('http://localhost/api/state?'+new URLSearchParams({project,chat})))).catch(()=>{}),15000);timer.unref();server.on('close',()=>clearInterval(timer));
+  const close=server.close.bind(server);
+  server.close=(...args)=>{for(const stop of [...streams])stop();return close(...args);};
   return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

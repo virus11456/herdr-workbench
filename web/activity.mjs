@@ -11,7 +11,7 @@ export function agentActivity(terminal,{pending=false,starting=false}={}){
  return '';
 }
 
-export function replyProgress({messages=[],agentId=null,terminal,name='領頭羊',posting=false,stopped=false,taskControls={}}){
+function replyPhase({messages=[],agentId=null,terminal,name='領頭羊',posting=false,stopped=false,taskControls={}}){
  if(posting)return{phase:'sending',text:'正在傳送訊息',animate:true};
  const belongs=m=>agentId?m.direct&&m.target===agentId:!m.direct;
  const user=messages.findLast(m=>m.kind==='user'&&belongs(m));if(!user||['cancelled','stopped'].includes(taskControls[user.messageId]))return null;
@@ -27,4 +27,20 @@ export function replyProgress({messages=[],agentId=null,terminal,name='領頭羊
  if(terminal?.waitingCollaboration)return{phase:'collaboration',text:`${name} 正在等協作回報`,animate:true};
  if(terminal?.status?.state==='working')return{phase:'working',text:`${name} 已收到，正在回覆`,animate:true};
  return{phase:'unconfirmed',text:`已送達 ${name}，回覆未核對`,animate:false};
+}
+
+export function replyProgress(args){
+ const progress=replyPhase(args);if(!progress||args.posting)return progress;
+ const {messages=[],agentId=null,terminal,now=Date.now()}=args;
+ const belongs=m=>agentId?m.direct&&(m.target||m.agentId)===agentId:!m.direct;
+ const user=messages.findLast(m=>m.kind==='user'&&belongs(m));
+ const began=Date.parse(user?.time),observed=messages.filter(m=>belongs(m)&&Date.parse(m.time)>=began);
+ const last=Math.max(began,...observed.map(m=>Date.parse(m.time)),Number(terminal?.observedAt)||0);
+ const elapsed=Number.isFinite(began)?Math.max(0,Math.floor((now-began)/1000)):0;
+ const quiet=Number.isFinite(last)?Math.max(0,Math.floor((now-last)/1000)):0;
+ const reason=progress.phase==='blocked'?'請在主機確認提示':progress.phase==='collaboration'?'等待其他代理回報':
+  progress.phase==='queued'?terminal?.status?.state==='working'?'前一個回合仍在處理':'等待代理啟動或接收':
+  progress.phase==='working'?'模型正在處理任務':progress.phase==='unconfirmed'?'等待回覆核對':'請查看任務狀態';
+ return {...progress,elapsedSeconds:elapsed,lastProgressAt:Number.isFinite(last)?last:null,reason,
+  stalled:quiet>=90&&!['blocked','stopped'].includes(progress.phase)};
 }

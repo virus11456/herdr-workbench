@@ -20,7 +20,8 @@ test('reply indicator never calls queued messages delivered, isolates agents, an
  assert.equal(replyProgress({...base,messages:[user,delivery]}).phase,'working');
  const other={kind:'reply',direct:true,target:'other',replyTo:user.messageId,time:'2026-11-20T00:00:02Z'};
  const done={...terminal,status:{app:'codex',state:'done'}};
- assert.deepEqual(replyProgress({...base,terminal:done,messages:[user,delivery,other]}),{phase:'unconfirmed',text:'已送達 工程師，回覆未核對',animate:false});
+ const unconfirmed=replyProgress({...base,terminal:done,messages:[user,delivery,other]});
+ assert.equal(unconfirmed.phase,'unconfirmed');assert.equal(unconfirmed.text,'已送達 工程師，回覆未核對');assert.equal(unconfirmed.animate,false);
  const answer={...other,target:'engineer'};assert.equal(replyProgress({...base,terminal:done,messages:[user,delivery,answer]}),null);
  assert.equal(replyProgress({...base,terminal:{...terminal,status:{app:'codex',state:'blocked'}},messages:[user,delivery]}).animate,false);
  assert.equal(replyProgress({...base,terminal:{...done,waitingCollaboration:true},messages:[user,delivery,answer]}).phase,'collaboration');
@@ -32,4 +33,13 @@ test('a second queued message does not inherit the previous reply or another mes
  assert.equal(replyProgress({...base,messages:[],posting:true}).phase,'sending');
  const leadUser={...user,direct:false,target:'team'},leadReply={kind:'reply',time:'2026-11-20T00:00:02Z'};
  assert.equal(replyProgress({messages:[leadUser,delivery,leadReply],terminal:{...terminal,status:{app:'claude-code',state:'done'}}}),null);
+});
+
+test('waiting feedback describes observed progress and never treats a quiet task as completed',()=>{
+ const now=Date.parse(user.time)+120000;
+ const result=replyProgress({...base,messages:[user,delivery],now});
+ assert.equal(result.phase,'working');assert.equal(result.elapsedSeconds,120);assert.equal(result.stalled,true);assert.match(result.reason,/模型/);
+ const blocked=replyProgress({...base,messages:[user,delivery],terminal:{...terminal,status:{app:'codex',state:'blocked'}},now});
+ assert.equal(blocked.stalled,false);assert.match(blocked.reason,/主機/);
+ const fresh=replyProgress({...base,messages:[user,delivery],terminal:{...terminal,observedAt:now-1000},now});assert.equal(fresh.stalled,false);
 });

@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-agent42';
+const UI_BUILD='20261122-live43';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -33,6 +33,24 @@ let state=null,selection={project:initialQuery.get('project'),chat:initialQuery.
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 let sheepSource=null,navSnapshot='',messageSnapshot='',checklistSnapshot='',attentionSnapshot='';
 let olderMessages=[],historyBefore=null,historyLoading=false;
+let updates=null,updatesKey='',updatesReady=false,updateTimer=null,pendingUpdate=false;
+function requestUpdate(){
+ pendingUpdate=true;clearTimeout(updateTimer);
+ updateTimer=setTimeout(()=>{
+  if(posting||navigating||document.hidden)return;
+  pendingUpdate=false;refresh().finally(scheduleRefresh);
+ },120);
+}
+function connectUpdates(){
+ if(!('EventSource' in window)||!selection.project||!selection.chat||document.hidden)return;
+ const key=selection.project+':'+selection.chat;
+ if(updates&&updatesKey===key)return;
+ updates?.close();updatesReady=false;updatesKey=key;
+ const stream=new EventSource('./api/events?'+new URLSearchParams(selection));updates=stream;
+ stream.addEventListener('ready',()=>{if(updates!==stream)return;updatesReady=true;requestUpdate();});
+ stream.addEventListener('change',()=>{if(updates===stream)requestUpdate();});
+ stream.onerror=()=>{if(updates===stream){updatesReady=false;scheduleRefresh();}};
+}
 function hydrateSheep(wrap){
  if(!sheepSource)return;
  const svg=sheepSource.cloneNode(true);svg.classList.add('sheep-character');svg.setAttribute('aria-hidden','true');wrap.replaceChildren(svg);
@@ -78,18 +96,32 @@ let progressSnapshot='';
 function renderReplyProgress(){
  const agent=currentAgent(),terminal=agent?terminalFor(agent):state?.terminals.find(t=>t.address===state.control?.terminal),name=agent?.name||state?.coordinatorName||'領頭羊';
  const progress=replyProgress({messages:state?.messages,agentId:agent?.id||null,terminal,name,posting,taskControls:state?.taskControls,stopped:agent?state?.stoppedAgents?.includes(agent.id):state?.startupStopped});
- const box=$('reply-progress'),key=JSON.stringify([progress,selectedAgent]);if(key===progressSnapshot)return;progressSnapshot=key;box.hidden=!progress;box.replaceChildren();if(!progress)return;
- box.dataset.phase=progress.phase;const sheep=avatar(agent?.provider||'claude');animateSheep(sheep,progress.phase==='working'?'working':progress.phase==='sending'||progress.phase==='queued'?'starting':'');box.append(sheep,el('span','',progress.text));
+ const seconds=progress?.elapsedSeconds||0,elapsed=seconds>=60?Math.floor(seconds/60)+' 分 '+seconds%60+' 秒':seconds+' 秒';
+ const time=progress?.lastProgressAt?new Date(progress.lastProgressAt).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):null;
+ const waitingText=progress?.reason?progress.reason+' · 已等待 '+elapsed+(time?' · 最後進度 '+time:''):'';
+ const box=$('reply-progress'),key=JSON.stringify([progress&&{...progress,elapsedSeconds:undefined},selectedAgent]);
+ if(key===progressSnapshot){const clock=box.querySelector('.reply-wait');if(clock)clock.textContent=waitingText;return;}
+ progressSnapshot=key;box.hidden=!progress;box.replaceChildren();if(!progress)return;
+ box.dataset.phase=progress.phase;const sheep=avatar(agent?.provider||'claude');animateSheep(sheep,progress.phase==='working'?'working':progress.phase==='sending'||progress.phase==='queued'?'starting':'');
+ const copy=el('div','reply-copy');copy.append(el('span','',progress.text));
+ if(progress.reason){
+  const clock=el('small','reply-wait',waitingText);clock.setAttribute('aria-hidden','true');copy.append(clock);
+  if(progress.stalled){copy.append(el('small','reply-stalled','一段時間沒有新進度，可查看任務狀態。'));const task=el('button','','查看任務');task.type='button';task.onclick=()=>openTasks();copy.append(task);}
+ }
+ box.append(sheep,copy);
  if(progress.animate){const dots=el('span','reply-dots');dots.setAttribute('aria-hidden','true');for(let i=0;i<3;i++)dots.append(el('i'));box.append(dots);}
 }
+setInterval(()=>{if(!document.hidden&&state)renderReplyProgress();},1000);
 const draftKey=(chat=selection.chat)=>`herdr-draft:${selection.project}:${chat}:${selectedAgent||'team'}`;
 const attachmentsByDraft=new Map();
+const attachmentUploads=new WeakMap(),previewUrls=new Map();
+function releaseAttachment(file){const url=previewUrls.get(file);if(url)URL.revokeObjectURL(url);previewUrls.delete(file);attachmentUploads.delete(file);}
 const currentAttachments=()=>attachmentsByDraft.get(draftKey())||[];
 const fileSizeLimit=15*1024*1024;
 const fileCountLimit=4;
 let attachmentSnapshot='';
 function renderAttachments(){
- const files=currentAttachments(),key=JSON.stringify([draftKey(),posting,files.map(f=>f.name)]);
+ const files=currentAttachments(),key=JSON.stringify([draftKey(),posting,files.map(f=>[f.name,f.size,f.lastModified,attachmentUploads.get(f)])]);
  if(key===attachmentSnapshot)return;
  attachmentSnapshot=key;
  const list=$('attachment-list');
@@ -97,15 +129,30 @@ function renderAttachments(){
  list.hidden=!files.length;
  files.forEach((file,index)=>{
   const row=el('div','attachment-chip'),name=el('span','',file.name),remove=el('button','','×');
+  if(/^image\/(png|jpeg|webp|gif|avif)$/.test(file.type)){
+   if(!previewUrls.has(file))previewUrls.set(file,URL.createObjectURL(file));
+   const preview=el('button','attachment-preview');preview.type='button';preview.setAttribute('aria-label','預覽附件 '+file.name);
+   const image=el('img');image.src=previewUrls.get(file);image.alt='';preview.append(image);
+   preview.onclick=()=>{$('attachment-preview-title').textContent=file.name;$('attachment-preview-image').src=previewUrls.get(file);$('attachment-preview-dialog').showModal();};
+   row.append(preview);
+  }
   name.title=file.name;remove.type='button';remove.disabled=posting;
   remove.setAttribute('aria-label','移除附件 '+file.name);
   remove.onclick=()=>{
    const key=draftKey(),next=files.filter((_,i)=>i!==index);
+   releaseAttachment(file);
    if(next.length)attachmentsByDraft.set(key,next);else attachmentsByDraft.delete(key);
    try{localStorage.removeItem(key+':pending');}catch{}
    updateSend();$('add-attachment').focus();
   };
-  row.append(name,remove);list.append(row);
+  const copy=el('div','attachment-copy');copy.append(name);
+  const upload=attachmentUploads.get(file);
+  if(upload){
+   const label=upload.state==='failed'?upload.error:upload.state==='complete'?'已上傳，等待傳送訊息':'上傳中 '+upload.percent+'%';
+   copy.append(el('small','attachment-state'+(upload.state==='failed'?' failed':''),label));
+   if(upload.state==='uploading'){const bar=el('progress');bar.max=100;bar.value=upload.percent;bar.setAttribute('aria-label',file.name+' 上傳進度');copy.append(bar);}
+  }
+  row.append(copy,remove);list.append(row);
  });
 }
 $('add-attachment').onclick=()=>$('attachment-input').click();
@@ -123,16 +170,25 @@ async function uploadFiles(scope,id,files,csrf){
  for(const [slot,file] of files.entries()){
   notice(`正在上傳附件 ${slot+1}/${files.length}`);
   const query=new URLSearchParams({...scope,id,slot});
-  const response=await fetch('./api/attachment?'+query,{
-   method:'POST',headers:{'Content-Type':'application/octet-stream','X-Herdr-CSRF':csrf,
-    'X-Herdr-Filename':encodeURIComponent(file.name)},body:file
-  });
-  const result=await response.json();
-  if(!response.ok)throw Error(result.error||'附件上傳失敗。');
-  names.push(result.name);
+  attachmentUploads.set(file,{state:'uploading',percent:0});renderAttachments();
+  try{
+   const result=await new Promise((resolve,reject)=>{
+    const request=new XMLHttpRequest();request.open('POST','./api/attachment?'+query);request.responseType='json';request.timeout=120000;
+    request.setRequestHeader('Content-Type','application/octet-stream');request.setRequestHeader('X-Herdr-CSRF',csrf);request.setRequestHeader('X-Herdr-Filename',encodeURIComponent(file.name));
+    request.upload.onprogress=event=>{attachmentUploads.set(file,{state:'uploading',percent:Math.min(100,Math.round(event.loaded/(event.lengthComputable?event.total:file.size)*100))});renderAttachments();};
+    request.onload=()=>request.status>=200&&request.status<300&&request.response?.name?resolve(request.response):reject(Error(request.response?.error||'附件上傳失敗，請重試。'));
+    request.onerror=()=>reject(Error('上傳連線中斷，請確認網路後重試。'));request.ontimeout=()=>reject(Error('上傳逾時，請確認網路後重試。'));request.onabort=()=>reject(Error('上傳已中止，可重新傳送。'));
+    request.send(file);
+   });
+   attachmentUploads.set(file,{state:'complete',percent:100});renderAttachments();names.push(result.name);
+  }catch(error){attachmentUploads.set(file,{state:'failed',error:error.message});renderAttachments();throw error;}
  }
  return names;
 }
+$('attachment-preview-close').onclick=()=>$('attachment-preview-dialog').close();
+$('attachment-preview-dialog').addEventListener('close',()=>$('attachment-preview-image').removeAttribute('src'));
+$('retry-upload').onclick=()=>$('composer').requestSubmit();
+window.addEventListener('beforeunload',()=>{for(const file of previewUrls.keys())releaseAttachment(file);});
 const coordinatorRecipient=()=>state.coordinatorAgentId||state.agents.find(a=>a.id==='starter')?.id||null;
 function persistDraft(){try{localStorage.setItem(draftKey(),$('draft').value);}catch{}}
 function restoreDraft(){
@@ -205,6 +261,7 @@ async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
   if(recordHistory&&link.href!==location.href)history.pushState(null,'',link);
   else history.replaceState(null,'',link);
   render();
+  connectUpdates();
   if(first){restoreDraft();$('feed').scrollTop=$('feed').scrollHeight;}
   return true;
  }catch(e){if(n===revision){notice(e.message);$('status').textContent='主機離線，請檢查 Tailscale';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
@@ -268,10 +325,7 @@ function renderNav(){
  if(menuContext)return;
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control,state?.coordinatorPreferredModel,state?.pendingAgents,state?.sidebar]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;closeAgentMenu(false);
  const nav=$('members');nav.replaceChildren();const query=$('search').value.toLocaleLowerCase().trim();
- const groups=new Map();
- for(const p of state?.projects||[]){const name=p.category||'未分類';if(!groups.has(name))groups.set(name,[]);groups.get(name).push(p);}
- for(const [category,projects] of groups){const group=el('div','project-category-group');
- for(const project of projects){const members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
+ for(const project of state?.projects||[]){const group=el('div','project-group'),members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
   const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id);
   caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};
   const titleRow=el('div','project-title-row');
@@ -280,7 +334,7 @@ function renderNav(){
   edit.onclick=()=>openProjectEditor(project.id);
   titleRow.append(caption,edit);group.append(titleRow);if(project.id!==selection.project){
    const preview=[...(!project.agentWorkspace?[{id:null,name:project.coordinatorName||'領頭羊',provider:project.coordinatorProvider||'claude',model:project.coordinatorPreferredModel}]:[]),...members];
-   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}continue;
+   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}nav.append(group);continue;
   }
   for(const id of visibleAgentIds()){const a=id==='__coordinator__'?null:members.find(a=>a.id===id);if(id!=='__coordinator__'&&!a)continue;const lead=!a,name=a?.name||state.coordinatorName||'領頭羊',t=a?terminalFor(a):state.terminals.find(t=>t.address===state.control?.terminal),activity=activityFor(a,t),active=lead?!selectedAgent:selectedAgent===id;
    const profile=a||{provider:t?.provider||state.coordinatorProvider||'claude',model:state.coordinatorPreferredModel};
@@ -292,8 +346,7 @@ function renderNav(){
    const more=el('button','member-more','⋯');more.type='button';more.setAttribute('aria-label',name+'的操作選單');more.setAttribute('aria-haspopup','menu');more.setAttribute('aria-expanded','false');more.onclick=()=>menuContext?.id===id?closeAgentMenu():openAgentMenu(id,more);row.append(more);
    row.ondragstart=e=>{if(e.target.closest('.member-more')){e.preventDefault();return;}dragAgent=id;row.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-herdr-agent',id);closeAgentMenu(false);};row.ondragend=()=>{dragAgent=null;row.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(n=>n.classList.remove('drag-over'));};row.ondragover=e=>{if(dragAgent&&dragAgent!==id){e.preventDefault();row.classList.add('drag-over');row.dataset.drop=e.clientY>row.getBoundingClientRect().top+row.offsetHeight/2?'after':'before';}};row.ondragleave=()=>row.classList.remove('drag-over');row.ondrop=e=>{e.preventDefault();row.classList.remove('drag-over');if(dragAgent&&dragAgent!==id)reorderAgent(dragAgent,id,row.dataset.drop==='after');};group.append(row);
   }
- }
- if(group.childElementCount){group.prepend(el('h2','project-category-title',category));nav.append(group);}
+  nav.append(group);
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
 }
@@ -408,13 +461,13 @@ function renderTasks(){
 }
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v42`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v43`:'版本待確認';
  renderNav();const agent=currentAgent(),live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
  const project=activeProject(),profile=agent||{provider:live?.provider||state.coordinatorProvider||'claude',model:state.coordinatorPreferredModel};
  const label=modelLabel(profile,live,project?.lastModels?.[agent?.id||'__coordinator__']);
- $('subtitle').textContent=[...new Set([agent?agent.group:project?.name,providerName(profile.provider),label].filter(Boolean))].join(' · ');
+ $('subtitle').textContent=[...new Set([project?.name,providerName(profile.provider),label].filter(Boolean))].join(' · ');
  $('recipient').textContent=agent?`交給 ${agent.name}`:'專案協作';
  $('edit-agent').hidden=true;
  $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):state.startupStopped?'總控啟動已停止，等待你重新開啟':agent?`${providerName(agent.provider)} · ${agentStatus(agent,live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
@@ -512,13 +565,13 @@ $('composer').onsubmit=async e=>{
   pending={text,id:crypto.randomUUID(),fileKey};
  }
  try{localStorage.setItem(pendingKey,JSON.stringify(pending));}catch{}
- posting=true;updateSend();renderReplyProgress();
+ posting=true;$('retry-upload').hidden=true;updateSend();renderReplyProgress();
  try{
   const attachments=files.length?await uploadFiles(scope,pending.id,files,csrf):undefined;
   const delivered=await api('message',{text,id:pending.id,attachments,
    allowAgentCreation:pending.allowAgentCreation,...(agent?{agentId:agent.id}:{})},scope);
   try{localStorage.removeItem(pendingKey);localStorage.removeItem(key);}catch{}
-  attachmentsByDraft.delete(key);
+  attachmentsByDraft.delete(key);for(const file of files)releaseAttachment(file);
   if(draftKey()===key){
    $('draft').value='';
    if(delivered.direct&&delivered.target!==selectedAgent){selectedAgent=delivered.target;restoreDraft();}
@@ -527,7 +580,7 @@ $('composer').onsubmit=async e=>{
     delivered.status==='sent'?'訊息已送達。':`訊息已排隊，等待 ${to} 接收。`);
   }
   await refresh();
- }catch(error){notice(error.message);}
+ }catch(error){notice(error.message);$('retry-upload').hidden=!files.length;}
  finally{posting=false;updateSend();renderReplyProgress();scheduleRefresh();}
 };
 $('search').oninput=renderNav;
@@ -583,38 +636,32 @@ function scheduleRefresh(){
  if(document.hidden)return;
  const active=state?.appOpen&&['sending','queued','working','collaboration'].includes($('reply-progress').dataset.phase)&&
   !$('reply-progress').hidden;
- refreshTimer=setTimeout(async()=>{if(!posting&&!navigating)await refresh();scheduleRefresh();},active?1250:4000);
+ refreshTimer=setTimeout(async()=>{if(!posting&&!navigating){pendingUpdate=false;await refresh();}scheduleRefresh();},pendingUpdate?200:updatesReady?15000:active?1250:4000);
 }
 function refreshForeground(){
  clearTimeout(refreshTimer);
+ if(document.hidden){updates?.close();updates=null;updatesKey='';updatesReady=false;return;}
  if(!document.hidden&&!posting&&!navigating)refresh().finally(scheduleRefresh);
 }
 document.addEventListener('visibilitychange',refreshForeground);
 window.addEventListener('online',refreshForeground);
+window.addEventListener('pageshow',refreshForeground);
+window.addEventListener('pagehide',()=>{updates?.close();updates=null;updatesKey='';updatesReady=false;});
 refresh().finally(scheduleRefresh);
 
-$('new-project').onclick=()=>{renderCategoryOptions();$('project-name').value='';$('new-project-category').value='';$('project-dialog').showModal();};
+$('new-project').onclick=()=>{$('project-name').value='';$('project-dialog').showModal();};
 $('project-cancel').onclick=()=>$('project-dialog').close();
-$('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await api('project',{name:$('project-name').value.trim(),category:$('new-project-category').value});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){notice(error.message);}finally{button.disabled=false;}};
+$('project-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await api('project',{name:$('project-name').value.trim()});$('project-dialog').close();await switchChat(result.project,result.chat);notice('專案已建立。加入需要的代理，自行設定職責。');}catch(error){notice(error.message);}finally{button.disabled=false;}};
 
 $('hero-sheep').append(avatar('claude'));
 $('search-toggle').onclick=()=>{const show=$('search-wrap').hidden;$('search-wrap').hidden=!show;if(show)$('search').focus();else{$('search').value='';renderNav();}};
-function renderCategoryOptions(){
- const options=[...new Set((state?.projects||[]).map(p=>p.category).filter(Boolean))];
- $('project-category-options').replaceChildren(...options.map(name=>{const option=el('option');option.value=name;return option;}));
-}
 const projectEditor=$('project-edit-dialog');
 function openProjectEditor(projectId){
  const project=state?.projects.find(p=>p.id===projectId);
  if(!project||project.available===false)return;
  projectEditor.dataset.project=projectId;
- projectEditor.dataset.category=project.category||'';
- renderCategoryOptions();
  $('project-rename').value=project.name;
- $('project-category').value=project.category||'';
- $('remove-project-category').hidden=!project.category;
  $('project-rename-result').textContent='';
- $('project-category-result').textContent='';
  projectEditor.showModal();
 }
 $('project-edit-close').onclick=()=>projectEditor.close();
@@ -631,18 +678,10 @@ async function saveProjectEdit(route,data,resultId){
  const result=$(resultId);
  result.textContent='';
  try{
-  const saved=await api(route,{project,chat:null,...data});
+  await api(route,{project,chat:null,...data});
   await refresh();
   if(!projectEditor.open||projectEditor.dataset.project!==project)return;
-  if(route==='project-name'){
-   result.textContent='專案名稱已保存。';
-  }else{
-   projectEditor.dataset.category=saved.category;
-   $('project-category').value=saved.category;
-   $('remove-project-category').hidden=!saved.category;
-   renderCategoryOptions();
-   result.textContent=data.action==='remove'?'分類已刪除，專案已移至未分類。':'分類已保存。';
-  }
+  result.textContent='專案名稱已保存。';
  }catch(error){
   if(projectEditor.open&&projectEditor.dataset.project===project)result.textContent=error.message;
  }finally{
@@ -652,15 +691,6 @@ async function saveProjectEdit(route,data,resultId){
 }
 $('project-rename-form').onsubmit=e=>{
  e.preventDefault();saveProjectEdit('project-name',{name:$('project-rename').value.trim()},'project-rename-result');
-};
-$('project-category-form').onsubmit=e=>{
- e.preventDefault();saveProjectEdit('project-category',{action:'set',category:$('project-category').value},'project-category-result');
-};
-$('remove-project-category').onclick=()=>{
- const category=projectEditor.dataset.category;
- if(category&&confirm('刪除「'+category+'」分類？此分類的所有專案都會移至未分類。')){
-  saveProjectEdit('project-category',{action:'remove',category},'project-category-result');
- }
 };
 let memoryRevision=0;
 const usageNumber=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:2});
