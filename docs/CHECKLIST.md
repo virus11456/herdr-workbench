@@ -1,0 +1,47 @@
+# 目前完成與待辦
+
+更新：2026-11-22（台灣時間）。程式版本 **0.8.11-dev · v52**，介面 `20261122-agents52`。這份文件列目前狀態；舊版驗證過程保留於 [VALIDATION.md](../VALIDATION.md)。只有實際驗證通過才勾選。
+
+## 最近四項改進
+
+- [x] 訊息提示一致：依同一訊息的實際送達及配對回覆更新，舊任務不會誤清下一筆提示。v50 真實算術回覆及雙頁同步通過。
+- [x] 長對話更新：保留未變的訊息、焦點、選取及閱讀位置。1,100 則既有節點保留，只新增一則；桌面瀏覽器實測通過。
+- [x] 聊天內協作摘要：由持久紀錄顯示派工、回報、修正與驗收；不以 queued 或代理自稱當作完成。v51 隔離生命週期及主機唯讀核對通過。
+- [x] 代理建立流程統一：手動、新版派工及舊工作代理共用名冊，沿用原程序。v52 真實 Claude → Codex 建立、原回報、直接交辦、同程序及第二個桌面頁面同步通過；143 項隔離回歸通過。
+
+操作及截圖見 [使用教學](USAGE.md)。
+
+## 本輪補驗
+
+- [x] 最新 v52 公開 ZIP 在全新 macOS 15.8.2 arm64 雲端機安裝通過：SHA-256、安裝預覽無寫入、官方 CLI、兩個背景服務、四個 Core 範本、loopback、身份與 Origin、預設領頭羊、58 個安裝檔逐位元比對及包內 143 項測試。[實際執行紀錄](https://github.com/virus11456/herdr-workbench/actions/runs/45000784638)
+- [x] 四引擎費用來源重新查核：已複查官方文件與本機已完成回合的欄位；只保存欄位類型，未新增模型任務。查核完成，實付費用整合仍列下方待辦。
+
+雲端安裝使用測試身份，沒有登入模型、Drive 或真實 Tailscale，沒有進行實體重開機。不能用此項代替新實體主機驗收。
+
+## 尚未完成
+
+| 待辦 | 目前狀態 | 通過條件／下一步 |
+| --- | --- | --- |
+| 真正 iPhone 附件上傳與電腦同步 | 使用者要求暫緩，不進行手機測試 | 日後恢復時，由 iPhone 實際選圖並送出；核對主機原檔、電腦自動同步、代理讀圖及手機同一配對回覆。縮圖預覽或電腦模擬尺寸不算通過 |
+| 全新實體 Mac 的本人登入、Drive、Tailscale 與重開機 | 等待另一台可操作的實體 Mac | 本人完成各帳號與系統授權；驗證專案雲端回讀、另一裝置同一 PWA、登入 macOS 後服務及網路自動恢復。現有主機的第二次重開機已通過 |
+| 四引擎每回合實付費用 | 等待可核對的官方資料 | 必須有幣別、實際扣款金額、供應商識別及可對應 Herdr 回合的識別，再測試配對與顯示。現有 token、額度、估價及零值不代替實付 |
+
+目前沒有已列入本表、且可在這台主機獨立完成的其他未結案開發項目。新增需求另行列項，不把待本人操作或待供應商資料的項目勾成完成。
+
+## 實付費用查核依據
+
+以下是目前使用的 CLI／帳號資料範圍，不代表供應商所有商用帳單產品都沒有費用資訊。
+
+| 引擎 | 已核對的可用資料 | 為何沒有顯示每回合實付 |
+| --- | --- | --- |
+| Claude | token、狀態列用量及會話估價 | 官方說明狀態列金額是客戶端估價，可能與帳單不同；訂閱包含的用量不能直接當每回合付款。[狀態列](https://code.claude.com/docs/en/statusline#available-data)、[費用說明](https://code.claude.com/docs/en/costs) |
+| Codex | token、帳號使用量及剩餘額度 | 現有 App Server 資料未提供可對應 Herdr 單回合的實付金額；桌面估價及 credits 不等於該回合的貨幣扣款。[App Server](https://learn.chatgpt.com/docs/app-server#7-token-usage-chatgpt)、[用量與估價說明](https://help.openai.com/en/articles/20001478-reviewing-work-and-codex-usage-and-using-personal-analytics-in-chatgpt-desktop) |
+| MiniMax | 官方 Token Plan 額度、回合 token | 官方 quota 指令讀帳號餘額或計畫剩餘量；本機回合 cost 為零，沒有相符付款紀錄，不能宣稱免費或實付為零。[官方 quota 原始碼](https://github.com/MiniMax-AI/cli/blob/main/src/commands/quota/show.ts) |
+| Antigravity | token、模型額度及狀態列估價 | 官方明示 cost 是牌價估算、不是帳單金額；AI credits 活動沒有可用來配對 Herdr 回合的實付紀錄。[CLI 狀態列](https://antigravity.google/docs/cli/statusline/)、[Google One credits](https://support.google.com/googleone/answer/16287445) |
+
+## 如何接續驗收
+
+1. 先查看本表的通過條件，只執行已授權範圍；手機暫緩時不主動要求操作。
+2. 記錄版本、平台與實際結果。模型回報要配對原訊息；沙箱 runtime 請求由真實目前總控發出，再讀同一 ID 的 response。
+3. 成功後才勾清單，更新驗證文件與教學；失敗或缺少設備／資料時保留原狀態。
+4. 只同步程式及匿名摘要到 GitHub；憑證、原對話、控制檔與原始終端資料留在主機。
