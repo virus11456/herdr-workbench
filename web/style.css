@@ -177,9 +177,8 @@ html.keyboard-open aside{top:var(--keyboard-top,0px);bottom:auto;height:var(--ke
 /* Pointer scrolling stays quiet; keyboard focus uses a small inset marker. */
 #feed:focus{outline:none}
 #feed:focus-visible{box-shadow:inset 2px 0 #a2c6f0}
-#feed,#members{scrollbar-width:thin;scrollbar-color:#555559 transparent}
-#feed::-webkit-scrollbar,#members::-webkit-scrollbar{width:6px;height:6px}
-#feed::-webkit-scrollbar-thumb,#members::-webkit-scrollbar-thumb{background:#555559;border-radius:8px}
+#feed,#members{scrollbar-width:none;-ms-overflow-style:none}
+#feed::-webkit-scrollbar,#members::-webkit-scrollbar{display:none;width:0;height:0}
 .reply-copy{min-width:0}.reply-wait,.reply-stalled{display:block;font-size:12px;line-height:1.6;color:var(--muted)}
 .reply-stalled{color:#e2c488}.reply-copy button{min-height:44px;margin-top:6px}
 #attachment-list{max-height:min(160px,22dvh)}

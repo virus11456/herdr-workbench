@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v43**（介面版本 `20261122-live43`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v44**（介面版本 `20261122-scroll44`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v44.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v44.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v44 隱藏側欄和聊天區的捲軸，保留滑鼠滾輪、觸控板及鍵盤捲動。
 
 v43 使用即時通知更新訊息和狀態，斷線時保留輪詢與重連。歷史對話增量解析並快取，最新保存的專案記憶優先於舊片段。等待時顯示原因、經過時間和最後進度；附件提供圖片預覽、上傳百分比及失敗重試。側欄直接列出專案名稱，新增與編輯專案只需處理名稱。
 
