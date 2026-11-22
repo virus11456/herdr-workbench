@@ -27,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-recovery54',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-receipts55',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -286,6 +286,8 @@ export function createServer(config) {
       const model=validModel(footer)?footer:validModel(stored)?stored:null;
       return {address:t.address,parent:t.parent,name:t.name,state:t.state,status:t.status,observedAt:t.status_ms||null,parked:t.address===owner?.address&&coordinatorParked,
         agentId,waitingCollaboration:jobs.some(j=>j.sourceTerminal===t.address&&!['done','failed'].includes(j.status)),
+        waitingReplyCapture:!!(ready&&directAgent&&binding.awaitingReply&&binding.delivered),
+        awaitingReplyMessageId:ready&&directAgent&&binding.awaitingReply&&binding.delivered?binding.lastMessageId:null,
         direct:directTerm,provider,model,modelObserved:!!(verified&&model)};
     }));
     const known=picked.lastModels;

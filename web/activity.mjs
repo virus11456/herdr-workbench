@@ -32,6 +32,7 @@ function replyPhase({messages=[],agentId=null,terminal,name='領頭羊',posting=
  if(terminal?.status?.state==='blocked')return{phase:'blocked',text:`${name} 等待你確認權限`,animate:false};
  if(stopped||terminal?.status?.state==='error'||(terminal?.state==='finished'&&delivery))return{phase:'stopped',text:`${name} 已停止，訊息與對話仍保留`,animate:false};
  if(!delivery){
+  if(terminal?.waitingReplyCapture&&terminal.awaitingReplyMessageId&&terminal.awaitingReplyMessageId!==user.messageId)return{phase:'queued',text:`這則已排隊，正在核對 ${name} 上一則回覆`,animate:false,waitingPriorReply:true};
   const busy=terminal?.state==='live'&&terminal?.status?.state==='working';
   return{phase:'queued',text:busy?`這則已排隊，${name} 正在處理前一則`:`等待 ${name} 接收`,animate:true};
  }
@@ -50,7 +51,7 @@ export function replyProgress(args){
  const elapsed=Number.isFinite(began)?Math.max(0,Math.floor((now-began)/1000)):0;
  const quiet=Number.isFinite(last)?Math.max(0,Math.floor((now-last)/1000)):0;
  const reason=progress.phase==='blocked'?'請在主機確認提示':progress.phase==='collaboration'?'等待其他代理回報':
-  progress.phase==='queued'?terminal?.status?.state==='working'?'前一個回合仍在處理':'等待代理啟動或接收':
+  progress.phase==='queued'?progress.waitingPriorReply?'上一則已送達，正在核對回覆；這則仍在排隊':terminal?.status?.state==='working'?'前一個回合仍在處理':'等待代理啟動或接收':
   progress.phase==='working'?'模型正在處理任務':progress.phase==='unconfirmed'?'等待回覆核對':'請查看任務狀態';
  return {...progress,elapsedSeconds:elapsed,lastProgressAt:Number.isFinite(last)?last:null,reason,
   stalled:quiet>=90&&!['blocked','stopped'].includes(progress.phase)};

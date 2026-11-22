@@ -298,11 +298,13 @@ function saveDirectReply(c,text,key,model){
  if(typeof text!=='string'||!text.trim())return{captured:false};
  if(actual.binding.legacyOwner&&!actual.binding.awaitingReply)return actual.binding.ownerAwaitingReply||!actual.binding.lastMessageId?{captured:false}:{captured:false,reason:'not_awaiting_direct_reply'};
  const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file),hash=createHash('sha256').update(key+'\n'+text).digest('hex');
- if(bindings[c.terminal].captureHash===hash)return{captured:false,reason:'duplicate'};
+ const previousHashes=Array.isArray(actual.binding.captureHashes)?actual.binding.captureHashes:[];
+ if(actual.binding.captureHash===hash||previousHashes.includes(hash))return{captured:false,reason:'duplicate'};
  const agent=roster(c).find(a=>a.id===actual.binding.agentId);if(!agent)return{captured:false};
  let {actions,visible}=replyActions(text);
  visible=visible.replace(/<herdr-reply-id>([a-f0-9-]{36})<\/herdr-reply-id>/g,(tag,id)=>id===actual.binding.lastMessageId?'':tag).trim();
  if(visible)log(c,agent.name,visible,'reply',{agentId:agent.id,target:agent.id,direct:true,replyTo:actual.binding.lastMessageId});
+ bindings[c.terminal].captureHashes=[...new Set([...previousHashes,...(actual.binding.captureHash?[actual.binding.captureHash]:[]),hash])].slice(-64);
  bindings[c.terminal].captureHash=hash;bindings[c.terminal].awaitingReply=false;if(typeof model==='string'&&model.length<120)bindings[c.terminal].model=model;
  const active=bindings[c.terminal].activeJob;save(file,bindings);
  const last=actual.binding.lastMessageId;
@@ -463,6 +465,9 @@ function sendDirect(c){
   if(!['idle','done'].includes(t.status?.state)||!t.status?.app){blocked={sent:0,reason:'agent_not_ready',terminal:id};continue;}
   if(bindings[id].activeJob&&!skillRequests(c).some(r=>r.id===item.id&&r.agentId===agent.id&&['approved','denied'].includes(r.status))){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
   const lease=read(path.join(c.teamDir,'direct-delivery.json'));if(lease?.terminal===id&&bindings[id].awaitingReply!==false&&Date.now()-lease.time<10000){blocked={sent:0,reason:'delivery_settling'};continue;}
+  // Core becoming idle is not proof that the native final reply reached us.
+  // Preserve the original message pairing until capture (or an explicit stop).
+  if(bindings[id].awaitingReply){blocked={sent:0,reason:'waiting_reply_capture',terminal:id};continue;}
   const creation=canProvisionForMessage(c,agent.id,item.allowAgentCreation)?item.id:null;
   const role=canCreateAgent(c,agent.id)
    ?'你是本專案的領頭羊。收到目標後先拆解並判斷分工，使用者文字指定人選時照指派實際送出，未指定時依任務挑選名冊成員。交付目標本身允許你在既有專案成員間完成所需分工。簡單問題與狀態查詢可直接答覆。'

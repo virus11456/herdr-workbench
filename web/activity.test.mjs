@@ -60,3 +60,9 @@ test('waiting feedback describes observed progress and never treats a quiet task
  assert.equal(blocked.stalled,false);assert.match(blocked.reason,/主機/);
  const fresh=replyProgress({...base,messages:[user,delivery],terminal:{...terminal,observedAt:now-1000},now});assert.equal(fresh.stalled,false);
 });
+test('a queued follow-up explains an earlier unpaired final reply without pretending the engine is working',()=>{
+ const second={...user,messageId:'message-2'},idle={...terminal,status:{app:'codex',state:'done'},waitingReplyCapture:true,awaitingReplyMessageId:user.messageId};
+ const p=replyProgress({...base,terminal:idle,messages:[user,delivery,second]});assert.equal(p.phase,'queued');assert.equal(p.animate,false);assert.match(p.text,/核對.*上一則回覆/);assert.match(p.reason,/仍在排隊/);
+ assert.equal(replyProgress({...base,terminal:idle,messages:[user,delivery]}).phase,'unconfirmed');
+ assert.equal(replyProgress({...base,terminal:{...idle,waitingReplyCapture:false},messages:[second]}).text,'等待 工程師 接收');
+});
