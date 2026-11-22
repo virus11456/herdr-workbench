@@ -5,7 +5,7 @@ import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-layout59';
+const UI_BUILD='20261123-binding60';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -627,7 +627,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v59`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v60`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';

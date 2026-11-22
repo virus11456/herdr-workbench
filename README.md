@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v59**（介面版本 `20261122-layout59`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v59.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v59.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v60**（介面版本 `20261123-binding60`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v60.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v60.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v60 在領頭羊派工發現舊綁定衝突時，自動核對真實程序、待派訊息、待回覆與未完成協作；能唯一確認應保留的既有獨立會話，且相關工作都已結束時，先備份再退役多餘的舊主管工作綁定。原代理、程序、設定與對話保留。忙碌、等待確認、來源不明或有兩個獨立會話時保留原狀。217項隔離測試通過；正式主機以兩個真實閒置程序重現衝突，自動修復後沿用原代理完成11+18=29、回報、終端核對及驗收，另一桌面同步。[自動修復範圍](VALIDATION.md#0811-dev--v60)、[使用方式](docs/USAGE.md#如何確認沿用代理並完成驗收)。
 
 v59 統一聊天、協作摘要與任務詳情的內容欄寬。已驗收工作收成一列，完整任務與證據仍可打開；預設聊天不再重複顯示同一份系統驗收收據。183項既有測試加上兩項收據邊界測試，共185項通過，另有26項桌面流程及正式主機版面核對。本次也完成四個專案24檔的Drive快取釋放：前後雲端原始檔雜湊一致，本機資料區塊歸零，原檔與控制鎖均保留。[驗證範圍](VALIDATION.md#0811-dev--v59)。
 

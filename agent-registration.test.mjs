@@ -119,3 +119,66 @@ test('cross-chat legacy delegation returns to its source and never creates a sec
  for(const name of ['direct-bindings.json','worker-bindings.json']){const file=path.join(f.c.teamDir,name),all=read(file),value=all.tworker;value.chat='original-chat';fs.writeFileSync(path.join(old.teamDir,name),JSON.stringify({tworker:value}));fs.writeFileSync(file,'{}');}f.terminals.get('tworker').labels['team.chat']='original-chat';
  const req={id:randomUUID(),sender:'towner',action:'run',args:{agentId:made.agentId,name:'same-role-next',task:'Same role new task',acceptance:'Return a verified answer'}};const queued=executeRequest(f.c,req);assert(queued.reused);assert.equal(drainDirect(f.c).sent,0);assert.equal(drainDirect(old).terminal,'tworker');captureReply(event('codex','verified next answer','next'),{...old,terminal:'tworker'},'Codex');const file=path.join(f.c.teamDir,'collaborations.json');assert.equal(read(file)[queued.collaborationId].status,'awaiting_review');const {drainCollaboration,collaborate}=await import('./direct.mjs');assert.equal(drainCollaboration(f.c).sent,1);const job=read(file)[queued.collaborationId];collaborate({...f.c,terminal:'towner'},{action:'accept',id:job.id,revision:job.revision,verification:'Verified the actual worker reply and read evidence',evidence:[]});assert.equal(read(file)[job.id].status,'done');assert.equal(executeRequest(f.c,req).status,'done');assert.equal(Object.keys(read(file)).length,1);assert.equal(f.calls.filter(x=>x[0]==='run').length,1);assert.equal(roster(f.c).length,1);assert.equal(read(path.join(old.teamDir,'direct-bindings.json')).tworker.activeJob,undefined);
 });
+
+function duplicateBindings(t,provider='codex'){
+ const f=fixture(t,provider),made=executeRequest(f.c,f.req);f.terminals.get('tworker').status.state='done';captureReply(event(provider,'Initial completed','old-turn'),{...f.c,terminal:'tworker'},provider);
+ const file=path.join(f.c.teamDir,'direct-bindings.json'),workerFile=path.join(f.c.teamDir,'worker-bindings.json');
+ const bindings=read(file),workers=read(workerFile);bindings.tworker.legacyOwner='toldowner';bindings.tworker.ownerAwaitingReply=false;workers.tworker.owner='toldowner';
+ const old=f.terminals.get('tworker');old.parent='toldowner';old.labels['team.owner']='toldowner';f.terminals.set('toldowner',{address:'toldowner',pid:9000,cwd:f.root,parent:null,state:'live',turn:1,status:{app:'claude-code',state:'done'},labels:{}});
+ f.terminals.set('tmodern',{address:'tmodern',pid:5678,cwd:f.root,parent:null,state:'live',turn:2,status:{app:provider==='claude'?'claude-code':provider==='minimax'?'mcode':provider,state:'done'},labels:{'team.direct':'true','team.agent':made.agentId,'team.chat':'chat'}});
+ bindings.tmodern={agentId:made.agentId,provider,chat:'chat',awaitingReply:false,delivered:true,lastMessageId:randomUUID()};fs.writeFileSync(file,JSON.stringify(bindings));fs.writeFileSync(workerFile,JSON.stringify(workers));
+ const request={id:randomUUID(),sender:'towner',action:'run',args:{agentId:made.agentId,task:'Check new arithmetic',acceptance:'Return an independently checked result'}};
+ return{...f,made,file,workerFile,request,before:fs.readFileSync(file),messageBytes:fs.readFileSync(path.join(f.c.teamDir,'messages.jsonl')),rosterBytes:fs.readFileSync(path.join(f.c.teamBase,'roster.json'))};
+}
+for(const provider of ['claude','codex','minimax','antigravity'])test(`${provider} duplicate idle legacy binding is backed up and retired without replacing the existing role or process`,t=>{
+ const f=duplicateBindings(t,provider),result=executeRequest(f.c,f.request);assert(result.reused&&!result.created);assert.equal(result.bindingRepair.keptTerminal,'tmodern');assert.equal(result.bindingRepair.retiredCount,1);
+ const b=read(f.file);assert(b.tworker.retired);assert.equal(b.tworker.supersededBy,'tmodern');assert.deepEqual(b.tmodern,JSON.parse(f.before).tmodern);assert(fs.readFileSync(path.join(f.c.teamBase,'roster.json')).equals(f.rosterBytes));assert(fs.readFileSync(path.join(f.c.teamDir,'messages.jsonl')).subarray(0,f.messageBytes.length).equals(f.messageBytes));
+ const folder=path.join(f.c.teamBase,'binding-repairs',fs.readdirSync(path.join(f.c.teamBase,'binding-repairs'))[0]),backup=read(path.join(folder,'before.json'));assert.equal(backup.files.find(x=>x.file===f.file).content,f.before.toString());assert.equal(read(path.join(folder,'repair.json')).state,'complete');assert.equal(fs.statSync(path.join(folder,'before.json')).mode&0o777,0o600);
+ assert.equal(drainDirect(f.c).terminal,'tmodern');assert.equal(f.terminals.get('tmodern').pid,5678);assert.equal(executeRequest(f.c,f.request).collaborationId,result.collaborationId);assert.equal(fs.readdirSync(path.join(f.c.teamBase,'binding-repairs')).length,1);assert.equal(f.calls.filter(x=>x[0]==='run').length,1);assert(!f.calls.some(x=>x[0]==='kill'||x[0]==='keys'||x[0]==='interrupt'));
+});
+for(const state of ['working','blocked','error'])test(`automatic binding repair preserves all bindings while the old worker is ${state}`,t=>{
+ const f=duplicateBindings(t);f.terminals.get('tworker').status.state=state;assert.throws(()=>executeRequest(f.c,f.request),/修復暫緩/);assert(fs.readFileSync(f.file).equals(f.before));assert(!fs.existsSync(path.join(f.c.teamBase,'binding-repairs')));
+});
+for(const kind of ['pending-chat','pending-direct','pending-request','open-job','awaiting-reply','awaiting-owner','active-binding-job','unknown-reply','pending-registration','pending-skill','owner-working','unknown-pid','ambiguous-modern','foreign-label','malformed-json','symlink-file','symlink-chat','backup-failure'])test(`automatic binding repair fails closed for ${kind}`,t=>{
+ const f=duplicateBindings(t),bindings=read(f.file);let reference=f.before;
+ const write=(name,value)=>fs.writeFileSync(path.join(f.c.teamDir,name),JSON.stringify(value));
+ if(kind.startsWith('pending-')&&['pending-chat','pending-direct','pending-request'].includes(kind)){const dir=path.join(f.c.teamDir,{'pending-chat':'chat-queue','pending-direct':'direct-queue','pending-request':'requests'}[kind]);fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,randomUUID()+'.json'),'{}');}
+ if(kind==='open-job')write('collaborations.json',{old:{id:'old',status:'awaiting_review'}});
+ if(kind==='awaiting-reply')bindings.tworker.awaitingReply=true;
+ if(kind==='awaiting-owner')bindings.tworker.ownerAwaitingReply=true;
+ if(kind==='active-binding-job')bindings.tworker.activeJob='old';
+ if(kind==='unknown-reply')delete bindings.tmodern.awaitingReply;
+ if(kind==='pending-registration')write('agent-registrations.json',{pending:{status:'pending',agentId:f.made.agentId}});
+ if(kind==='pending-skill')write('skill-requests.json',{pending:{status:'pending'}});
+ if(kind==='owner-working')f.terminals.get('toldowner').status.state='working';
+ if(kind==='unknown-pid')delete f.terminals.get('tworker').pid;
+ if(kind==='ambiguous-modern'){delete bindings.tworker.legacyOwner;const old=f.terminals.get('tworker');old.parent=null;old.labels={'team.direct':'true','team.agent':f.made.agentId,'team.chat':'chat'};}
+ if(kind==='foreign-label')f.terminals.get('tmodern').labels['team.agent']='foreign';
+ fs.writeFileSync(f.file,JSON.stringify(bindings));reference=fs.readFileSync(f.file);
+ if(kind==='malformed-json'){write('skill-requests.json','not-an-object');}
+ if(kind==='symlink-file'){const copy=f.file+'.kept';fs.renameSync(f.file,copy);fs.symlinkSync(copy,f.file);}
+ if(kind==='symlink-chat')fs.symlinkSync(f.c.teamDir,path.join(f.c.teamBase,'conversations','linked-chat'));
+ if(kind==='backup-failure')fs.writeFileSync(path.join(f.c.teamBase,'binding-repairs'),'not a directory');
+ assert.throws(()=>executeRequest(f.c,f.request));assert(fs.readFileSync(f.file).equals(reference));assert.equal(f.calls.filter(x=>x[0]==='run').length,1);assert(!f.calls.some(x=>['kill','keys','interrupt','send'].includes(x[0])));
+});
+test('binding repair detects a new queued task during inspection and leaves both sessions intact',t=>{
+ const f=duplicateBindings(t),original=f.c.run;let reads=0;f.c.run=(cmd,args)=>{const result=original(cmd,args);if(args[0]==='get'&&args[1]==='tmodern'&&++reads===3){const dir=path.join(f.c.teamDir,'direct-queue');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,randomUUID()+'.json'),'{}');}return result;};assert.throws(()=>executeRequest(f.c,f.request),/修復暫緩/);assert(fs.readFileSync(f.file).equals(f.before));
+});
+test('binding repair rolls back retirement if the original process changes during commit',t=>{
+ const f=duplicateBindings(t),original=f.c.run;f.c.run=(cmd,args)=>{const result=original(cmd,args);if(args[0]==='get'&&read(f.file).tworker.retired&&args[1]==='tmodern'){result.pid=9999;}return result;};assert.throws(()=>executeRequest(f.c,f.request),/保存後/);assert.deepEqual(read(f.file),JSON.parse(f.before));const dir=path.join(f.c.teamBase,'binding-repairs');assert.equal(read(path.join(dir,fs.readdirSync(dir)[0],'repair.json')).state,'aborted');
+});
+for(const kind of ['retired-working','retired-awaiting-reply','unadopted-working','unconfirmed-delivery'])test(`automatic binding repair protects ${kind} work`,t=>{
+ const f=duplicateBindings(t),bindings=read(f.file);
+ if(kind==='unconfirmed-delivery')bindings.tmodern.delivered=false;
+ else{
+  f.terminals.set('tbusy',{address:'tbusy',pid:9001,cwd:f.root,parent:'toldowner',state:'live',status:{app:'codex',state:'working'},labels:{}});
+  if(kind.startsWith('retired-'))bindings.tbusy={agentId:f.made.agentId,retired:true,...(kind==='retired-awaiting-reply'?{awaitingReply:true}:{})};
+  else{const workers=read(f.workerFile);workers.tbusy={owner:'toldowner',chat:'chat'};fs.writeFileSync(f.workerFile,JSON.stringify(workers));}
+ }
+ fs.writeFileSync(f.file,JSON.stringify(bindings));const before=fs.readFileSync(f.file);assert.throws(()=>executeRequest(f.c,f.request),/修復暫緩/);assert(fs.readFileSync(f.file).equals(before));
+});
+test('automatic repair preserves old-chat history and retires only the idle legacy binding across conversations',t=>{
+ const f=duplicateBindings(t),old=context(f.root,null,f.run,'old-chat',f.config);fs.mkdirSync(old.teamDir,{recursive:true});const bindings=read(f.file),workers=read(f.workerFile),b=bindings.tworker,w=workers.tworker;
+ b.chat='old-chat';w.chat='old-chat';delete bindings.tworker;delete workers.tworker;fs.writeFileSync(f.file,JSON.stringify(bindings));fs.writeFileSync(f.workerFile,JSON.stringify(workers));fs.writeFileSync(path.join(old.teamDir,'direct-bindings.json'),JSON.stringify({tworker:b}));fs.writeFileSync(path.join(old.teamDir,'worker-bindings.json'),JSON.stringify({tworker:w}));f.terminals.get('tworker').labels['team.chat']='old-chat';fs.writeFileSync(path.join(old.teamDir,'messages.jsonl'),'old history retained\n');const before=fs.readFileSync(path.join(old.teamDir,'messages.jsonl'));
+ const result=executeRequest(f.c,f.request);assert(result.bindingRepair);assert(read(path.join(old.teamDir,'direct-bindings.json')).tworker.retired);assert(!read(f.file).tmodern.retired);assert(fs.readFileSync(path.join(old.teamDir,'messages.jsonl')).equals(before));assert.equal(drainDirect(f.c).terminal,'tmodern');
+});

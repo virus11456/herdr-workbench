@@ -319,9 +319,123 @@ function chatScope(c,chat){
  if(!/^[a-z0-9][a-z0-9-]{0,63}$/.test(chat||''))throw Error('協作對話識別無效。');
  return{...c,chat,teamDir:path.join(c.teamBase,'conversations',chat)};
 }
-function existingAgentScope(c,agentId){
- const folder=path.join(c.teamBase,'conversations'),chats=fs.existsSync(folder)?fs.readdirSync(folder).filter(n=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(n)):[];
- const scopes=[chatScope(c,null),...chats.map(chat=>chatScope(c,chat))],matches=[];
+function bindingScopes(c){
+ const folder=path.join(c.teamBase,'conversations');
+ const entries=fs.existsSync(folder)?fs.readdirSync(folder,{withFileTypes:true}):[];
+ const chats=entries.filter(d=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(d.name));
+ if(chats.some(d=>d.isSymbolicLink()))throw Error('對話目錄是符號連結，無法安全核對舊綁定。');
+ return[chatScope(c,null),...chats.filter(d=>d.isDirectory()).map(d=>d.name).sort().map(chat=>chatScope(c,chat))];
+}
+function repairIdleBindings(c,agentId,requestId){
+ const stop=reason=>{throw Error('綁定自動修復暫緩：'+reason);};
+ if(!c.privateState||fs.realpathSync(c.teamBase)!==path.resolve(c.teamBase))stop('控制資料位置無法核對。');
+ const release=processLock(path.join(c.teamBase,'chat-delivery.lock'));
+ if(!release)stop('另一筆訊息正在交付，保留原綁定。');
+ try{
+  const snapshot=()=>{
+   const files=new Map(),terminals=new Map(),matches=[],scopes=bindingScopes(c);
+   const load=(file,allowArray=false)=>{
+    if(fs.realpathSync(path.dirname(file))!==path.resolve(path.dirname(file)))stop('資料目錄無法核對。');
+    let fd;try{
+     fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+     const s=fs.fstatSync(fd);if(!s.isFile())stop('控制檔案型態不明。');
+     const content=fs.readFileSync(fd,'utf8'),data=JSON.parse(content);
+     if(!data||typeof data!=='object'||!allowArray&&Array.isArray(data))stop('控制檔案格式不明。');
+     files.set(file,{file,content,ino:s.ino,dev:s.dev,mode:s.mode&0o777,sha256:createHash('sha256').update(content).digest('hex')});return data;
+    }catch(error){if(error.code==='ENOENT'){files.set(file,{file,content:null});return{};}throw error;}finally{if(fd!==undefined)fs.closeSync(fd);}
+   };
+   const inspect=(scope,id)=>{
+    let actual;try{actual=directTerminal(scope,id);}catch(error){if(missingTerminal(error))return null;throw error;}
+    if(!actual)stop('無法核對原終端身分。');
+    const t=actual.t;if(t.state==='finished')return null;
+    if(t.state!=='live'||!Number.isSafeInteger(t.pid)||t.pid<=0||!workerProvider(t))stop('原程序或引擎狀態不明。');
+    if(!['idle','done'].includes(t.status?.state)&&id!==c.terminal)stop('仍有代理正在工作或等待確認。');
+    terminals.set(id,{id,pid:t.pid,turn:t.turn??null,app:t.status.app,state:t.status.state,cwd:t.cwd,parent:t.parent??null,labels:t.labels});return actual;
+   };
+   load(path.join(c.teamBase,'roster.json'),true);
+   for(const scope of scopes){
+    const bindings=load(path.join(scope.teamDir,'direct-bindings.json'));
+    const workers=load(path.join(scope.teamDir,'worker-bindings.json'));
+    const jobs=load(path.join(scope.teamDir,'collaborations.json'));
+    if(Object.values(jobs).some(openJob))stop('仍有未完成或未驗收的協作。');
+    if(Object.values(load(registrationsFile(scope))).some(r=>r.status==='pending'))stop('仍有啟動結果待核對。');
+    if(Object.values(load(path.join(scope.teamDir,'skill-requests.json'))).some(r=>r.status==='pending'))stop('仍有安裝確認待處理。');
+    for(const name of ['chat-queue','direct-queue','requests']){
+     const dir=path.join(scope.teamDir,name);if(!fs.existsSync(dir))continue;
+     if(fs.realpathSync(dir)!==path.resolve(dir))stop('佇列目錄無法核對。');
+     for(const n of fs.readdirSync(dir).filter(n=>n.endsWith('.json'))){
+      if(name==='requests'&&scope.teamDir===c.teamDir&&n===requestId+'.json'){
+       const req=load(path.join(dir,n));if(req.id===requestId&&req.sender===c.terminal&&req.action==='run'&&req.args?.agentId===agentId)continue;
+      }
+      stop('仍有待派訊息或尚未處理的請求。');
+     }
+    }
+    for(const [id,b]of Object.entries(bindings)){
+     if(b.retired){
+      if(b.awaitingReply||b.ownerAwaitingReply||b.activeJob)stop('已退役綁定仍有待接回的工作。');
+      let old;try{old=c.run('hc',['get',id]);}catch(error){if(missingTerminal(error))continue;throw error;}
+      if(old.state!=='finished'&&(old.state!=='live'||!['idle','done'].includes(old.status?.state)))stop('已退役的原程序仍有工作或確認待處理。');
+      if(old.state==='live'){
+       if(!Number.isSafeInteger(old.pid)||old.pid<=0||!workerProvider(old))stop('已退役原程序的身分不明。');
+       terminals.set(id,{id,pid:old.pid,turn:old.turn??null,app:old.status.app,state:old.status.state,cwd:old.cwd,parent:old.parent??null,labels:old.labels});
+      }
+      continue;
+     }
+     if(id!==c.terminal&&(b.awaitingReply||b.ownerAwaitingReply||b.activeJob))stop('仍有回覆或工作等待接回。');
+     const actual=inspect(scope,id);if(!actual)continue;
+     if(id!==c.terminal&&b.awaitingReply!==false)stop('原會話是否等待回報尚未核對。');
+     if(id!==c.terminal&&b.lastMessageId&&b.delivered!==true)stop('原訊息送達結果尚未核對。');
+     const provider=workerProvider(actual.t),member=roster(c).find(a=>a.id===b.agentId);
+     if(!member||provider!==member.provider||(b.provider&&b.provider!==provider))stop('代理設定與原引擎不一致。');
+     if(b.legacyOwner){
+      if(b.awaitingReply!==false||b.ownerAwaitingReply!==false)stop('舊主管回報狀態尚未核對。');
+      const w=workers[id];if(!w||w.agentId!==b.agentId)stop('舊工作登記不一致。');
+      if(b.legacyOwner!==c.terminal){
+       const owner=c.run('hc',['get',b.legacyOwner]);
+       if(owner.address!==b.legacyOwner||owner.cwd!==c.cwd||owner.parent||owner.state!=='live'||!Number.isSafeInteger(owner.pid)||owner.pid<=0||!['idle','done'].includes(owner.status?.state)||!workerProvider(owner))stop('舊主管仍在工作或狀態不明。');
+       terminals.set(owner.address,{id:owner.address,pid:owner.pid,turn:owner.turn??null,app:owner.status.app,state:owner.status.state,cwd:owner.cwd,parent:null,labels:owner.labels});
+      }
+     }
+     if(b.agentId===agentId)matches.push({id,binding:b,scope});
+    }
+    for(const [id]of Object.entries(workers)){
+     if(bindings[id])continue;
+     let old;try{old=c.run('hc',['get',id]);}catch(error){if(missingTerminal(error))continue;throw error;}
+     if(old.state!=='finished')stop('仍有未登記為成員的舊工作程序，需先核對。');
+    }
+   }
+   const modern=matches.filter(m=>!m.binding.legacyOwner);
+   if(matches.length<2||modern.length!==1||matches.some(m=>m!==modern[0]&&!m.binding.legacyOwner))stop('無法唯一判定應保留的原會話。');
+   return{files:[...files.values()],terminals:[...terminals.values()],scopes:scopes.map(s=>s.teamDir),keep:modern[0],retire:matches.filter(m=>m!==modern[0])};
+  };
+  const first=snapshot(),second=snapshot();
+  const signature=s=>JSON.stringify({files:s.files,terminals:s.terminals,scopes:s.scopes});
+  if(signature(first)!==signature(second))stop('核對期間資料或程序已變更。');
+  const id=randomUUID(),folder=path.join(c.teamBase,'binding-repairs',new Date().toISOString().replaceAll(':','-')+'-'+id);
+  fs.mkdirSync(folder,{recursive:true,mode:0o700});
+  save(path.join(folder,'before.json'),{id,agentId,keep:second.keep.id,retired:second.retire.map(m=>m.id),files:second.files,terminals:second.terminals});
+  const audit={id,agentId,keep:second.keep.id,retired:second.retire.map(m=>m.id),state:'prepared',createdAt:new Date().toISOString()};save(path.join(folder,'repair.json'),audit);
+  const third=snapshot();if(signature(second)!==signature(third))stop('備份後資料或程序已變更。');
+  const changed=[];
+  try{
+   for(const file of [...new Set(third.retire.map(m=>path.join(m.scope.teamDir,'direct-bindings.json'))) ]){
+    const before=third.files.find(f=>f.file===file),all=JSON.parse(before.content);
+    for(const m of third.retire.filter(m=>path.join(m.scope.teamDir,'direct-bindings.json')===file))all[m.id]={...all[m.id],retired:true,retiredReason:'idle_duplicate_binding_auto_repaired',supersededBy:third.keep.id,retiredAt:audit.createdAt,repairId:id};
+    if(fs.readFileSync(file,'utf8')!==before.content||fs.lstatSync(file).ino!==before.ino)stop('保存前綁定已變更。');
+    save(file,all);changed.push({before,after:fs.readFileSync(file,'utf8')});
+   }
+   for(const t of third.terminals){const now=c.run('hc',['get',t.id]);if(now.pid!==t.pid||(now.turn??null)!==t.turn||now.status?.app!==t.app||now.cwd!==t.cwd||(now.parent??null)!==t.parent||JSON.stringify(now.labels)!==JSON.stringify(t.labels)||(t.id===c.terminal?now.status?.state!==t.state:!['idle','done'].includes(now.status?.state)))stop('保存後程序已開始其他工作。');}
+   save(path.join(folder,'repair.json'),{...audit,state:'complete'});
+  }catch(error){
+   for(const {before,after}of changed.reverse())if(fs.readFileSync(before.file,'utf8')===after)save(before.file,JSON.parse(before.content));
+   save(path.join(folder,'repair.json'),{...audit,state:'aborted'});throw error;
+  }
+  log(c,'系統','已確認沒有待派或未完成工作，自動修復舊測試綁定；原代理、程序與對話均保留。','progress');
+  return{...third.keep.scope,bindingRepair:{id,keptTerminal:third.keep.id,retiredCount:third.retire.length}};
+ }finally{release();}
+}
+function existingAgentScope(c,agentId,requestId){
+ const scopes=bindingScopes(c),matches=[];
  for(const scope of scopes){
   if(pendingRegistrations(scope).some(r=>r.agentId===agentId))throw Error('原代理啟動結果尚未核對，請等待原程序，不另開代理。');
   for(const [id,b]of Object.entries(read(path.join(scope.teamDir,'direct-bindings.json'))||{})){
@@ -330,7 +444,7 @@ function existingAgentScope(c,agentId){
    if(actual?.t.state==='live')matches.push(scope);
   }
  }
- if(matches.length>1)throw Error('同一代理有多個執行中的綁定，請先核對原程序，不增加另一個。');
+ if(matches.length>1)return repairIdleBindings(c,agentId,requestId);
  return matches[0]||c;
 }
 function saveCollaboration(c,args,grant){
@@ -363,9 +477,9 @@ function saveCollaboration(c,args,grant){
   if(prior){if(prior.targetAgent!==target.id||prior.task!==args.task||prior.acceptance!==args.acceptance)throw Error('同一派工請求不可更換內容。');return{id:prior.id,queued:prior.status==='queued',duplicate:true,status:prior.status};}
   const duplicate=Object.values(jobs).find(j=>j.sourceTerminal===c.terminal&&j.targetAgent===target.id&&j.task===args.task&&j.acceptance===args.acceptance&&openJob(j));if(duplicate)return{id:duplicate.id,queued:true,duplicate:true};
   if(Object.values(jobs).filter(openJob).length>=32)throw Error('請先完成或處理既有協作。');
-  const targetScope=existingAgentScope(c,target.id);
+  const targetScope=existingAgentScope(c,target.id,args.requestId);
   const id=randomUUID(),job={id,parentId:actual?.binding.activeJob||null,sourceAgent:source.id,sourceTerminal:c.terminal,targetAgent:target.id,targetChat:targetScope.chat||'legacy',task:args.task,acceptance:args.acceptance,status:'queued',revision:1,createdAt:Date.now(),...(args.requestId?{requestId:args.requestId}:{})};jobs[id]=job;save(file,jobs);queueCollaboration(c,job);
-  log(c,source.name,`已向 ${target.name} 交付協作，等待實際回報與驗收。`,'progress',{...(source.id?{target:source.id,agentId:source.id,direct:true}:{}),collaborationId:id});return{id,queued:true};
+  log(c,source.name,`已向 ${target.name} 交付協作，等待實際回報與驗收。`,'progress',{...(source.id?{target:source.id,agentId:source.id,direct:true}:{}),collaborationId:id});return{id,queued:true,...(targetScope.bindingRepair?{bindingRepair:targetScope.bindingRepair}:{})};
  }
  const job=jobs[args.id];if(!job||job.sourceTerminal!==c.terminal||job.sourceAgent!==source.id)throw Error('不能管理其他代理或對話的協作。');
  if(args.revision!==job.revision)throw Error('協作版本已更新，請使用回報提供的最新 revision。');
