@@ -1,3 +1,4 @@
+import {workerCandidates,createWorkerObserver} from './legacy-workers.mjs';
 import {skillRequests} from '../agent-policy.mjs';
 import {conversationUsage} from './usage.mjs';
 import {footerModel,mergeModel,terminalProvider,validModel} from './agent-models.mjs';
@@ -25,7 +26,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-recovery47',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-workers48',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -199,6 +200,7 @@ export function createServer(config) {
       return candidate?[[id,candidate]]:[];
     }));
   }
+  const observeWorkers=createWorkerObserver(core,scope=>transcript(scope).rows.map(r=>r.row));
   const state=async url=>{
     const accountQuotas=config.headless?readQuotas(home).filter(q=>!Object.hasOwn(quotaClis,q.provider)||quotaClis[q.provider]):[];
     const list=projects();const summary=list.map(p=>{
@@ -215,6 +217,8 @@ export function createServer(config) {
         agentWorkspace:!!p.agentWorkspace||!!profile.agentId,agents,sidebar,lastModels,available,
         chats:p.chats.map(c=>({id:c.id,title:c.title,createdAt:c.createdAt,topicFor:c.topicFor}))};
     });
+    const plans=list.flatMap(p=>{try{return[{id:p.id,candidates:workerCandidates(p,(folder,chat=null)=>ctx(folder,null,undefined,chat))}];}catch{return[];}});
+    if(plans.some(p=>p.candidates.length))for(const observed of await observeWorkers(plans)){const project=summary.find(p=>p.id===observed.id);if(project)project.temporaryWorkers=observed.workers;}
     if(!list.length)return {...release,accountQuotas,projects:summary,agents:[],messages:[],terminals:[],csrfToken:csrf,host:os.hostname(),appOpen:config.headless?serviceAlive(home):false,backendMode:config.headless?'background':'desktop',drive:storageStatus(config)};
     const choice=choose(url.searchParams.get('project'),url.searchParams.get('chat'),
       url.searchParams.get('latest')==='1',url.searchParams.get('agent'));

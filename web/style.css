@@ -193,3 +193,5 @@ main{position:relative}
 #file-drop-hint:not([hidden]){position:absolute;inset:12px;z-index:12;display:grid;place-items:center;border:2px dashed #9bbd86;border-radius:18px;background:#151b15ed;color:var(--fg);font-size:18px;font-weight:600;pointer-events:none}
 
 .skill-request{border:1px solid var(--border,#393939);border-radius:16px;padding:14px;margin:12px 0}.skill-request button,#skill-consent button{min-height:44px}#skill-consent-details dd{margin:4px 0 16px;overflow-wrap:anywhere}#skill-consent-details dt{color:#a8a8ad;font-size:13px}#skill-consent{max-width:520px;width:calc(100% - 32px)}
+
+.temporary-worker{display:flex;align-items:center;gap:8px;width:100%;min-height:66px;padding:8px 10px 8px 15px;border:0;background:transparent;text-align:left}.temporary-worker:hover{background:var(--hover)}.temporary-worker .sheep-avatar{width:42px;height:42px}#worker-detail-report{font-size:14px;line-height:1.7;overflow-wrap:anywhere}.project-agent-count{white-space:normal;text-align:right}

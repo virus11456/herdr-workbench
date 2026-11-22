@@ -4,7 +4,7 @@ import {attentionItems,taskCards,taskSummary,taskLabels} from './tasks.mjs';
 import {agentConnected,agentActivity,replyProgress} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-recovery47';
+const UI_BUILD='20261122-workers48';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -344,12 +344,33 @@ function openAgentMenu(id,button){closeAgentMenu(false);const a=id==='__coordina
  menu.hidden=false;button.setAttribute('aria-expanded','true');const r=button.getBoundingClientRect(),w=216;menu.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';menu.style.top=Math.max(8,Math.min(r.bottom+5,innerHeight-menu.offsetHeight-8))+'px';menu.querySelector('button').focus();
 }
 function openAgentAction(id,action,targetProject){const a=state.agents.find(a=>a.id===id);if(!a)return;const form=$('agent-action-form');form.dataset.agent=id;form.dataset.action=action;$('agent-action-title').textContent=action==='move'?'轉移 '+a.name:'刪除 '+a.name;$('agent-action-copy').textContent=action==='move'?'將引擎、模型與職責設定移至目的專案。原對話與檔案保留，目標專案使用自己的會話；不會複製登入資料。':'移除這個專案中的角色設定，停止已核對的閒置會話；原對話與專案檔案保留。';$('move-target-label').hidden=action!=='move';$('move-target').required=action==='move';$('move-target').disabled=action!=='move';$('move-target').replaceChildren();for(const p of state.projects.filter(p=>p.id!==state.project&&p.available!==false)){const o=el('option','',p.name);o.value=p.id;$('move-target').append(o);}if(targetProject)$('move-target').value=targetProject;$('agent-action-submit').textContent=action==='move'?'移至專案':'刪除代理';$('agent-action-error').textContent='';$('agent-action-dialog').showModal();}
+function workerStatus(worker){return({working:'工作中',blocked:'等待你確認',error:'發生錯誤',idle:'已連線 · 待命',done:'回合結束'})[worker.status?.state]||'狀態待確認';}
+let viewingWorker=null;
+function updateWorkerDialog(){
+ if(!viewingWorker)return;
+ const project=state.projects.find(p=>p.id===viewingWorker.project),worker=project?.temporaryWorkers?.find(w=>w.terminal===viewingWorker.terminal);
+ if(!worker){$('worker-detail-status').textContent='目前沒有可核對的執行中終端；既有回報保留在領頭羊對話。';return;}
+ $('worker-detail-title').textContent=worker.name;$('worker-detail-status').textContent=providerName(worker.provider)+' · '+workerStatus(worker);
+ const report=$('worker-detail-report');report.replaceChildren();if(worker.reportTime)report.append(el('p','help','最近回報 '+new Date(worker.reportTime).toLocaleString('zh-TW')));
+ report.append(formatMessage(document,worker.lastReport||'尚未收到工作代理回報。'));
+}
+$('worker-detail-close').onclick=()=>$('worker-detail').close();
+$('worker-detail-owner').onclick=async()=>{const worker=viewingWorker;$('worker-detail').close();if(worker)await switchChat(worker.project,worker.chat,null);};
+function appendTemporaryWorkers(group,project,query){
+ for(const worker of project.temporaryWorkers||[]){
+  if(query&&!`${project.name} ${worker.name} ${providerName(worker.provider)}`.toLocaleLowerCase().includes(query))continue;
+  const b=el('button','temporary-worker');b.type='button';b.dataset.worker=worker.terminal;b.setAttribute('aria-label',project.name+'的'+worker.name+'，查看工作回報');
+  const sheep=avatar(worker.provider);animateSheep(sheep,agentActivity(worker));b.append(sheep);const copy=el('span','member-copy');copy.append(el('strong','member-name',worker.name));appendModelLabel(copy,providerName(worker.provider)+' · '+workerStatus(worker),'臨時工作代理');b.append(copy);
+  const connected=agentConnected(worker),dot=el('span','live-dot'+(connected?' is-connected':'')+(connected&&agentActivity(worker)?' is-busy':''));dot.setAttribute('aria-hidden','true');dot.title=connected?'已連線':'未連線';b.append(dot);
+  b.onclick=()=>{viewingWorker={project:project.id,chat:worker.chat,terminal:worker.terminal};updateWorkerDialog();$('worker-detail').showModal();};group.append(b);
+ }
+}
 function renderNav(){
  if(menuContext)return;
  const snapshot=JSON.stringify([selection,selectedAgent,$('search').value,state?.projects,state?.agents,state?.terminals,state?.control,state?.coordinatorPreferredModel,state?.pendingAgents,state?.sidebar]);if(snapshot===navSnapshot)return;navSnapshot=snapshot;closeAgentMenu(false);
  const nav=$('members');nav.replaceChildren();const query=$('search').value.toLocaleLowerCase().trim();
- for(const project of state?.projects||[]){const group=el('div','project-group'),members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
-  const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id);
+ for(const project of state?.projects||[]){const group=el('div','project-group'),members=project.id===selection.project?state.agents:(project.agents||[]);if(query&&!`${project.name} ${members.map(a=>a.name+' '+providerName(a.provider)).join(' ')} ${(project.temporaryWorkers||[]).map(w=>w.name+' '+providerName(w.provider)).join(' ')}`.toLocaleLowerCase().includes(query))continue;
+  const total=members.length+(project.agentWorkspace?0:1),caption=el('button','project-caption');caption.append(el('span','project-name',project.name),el('span','project-agent-count',total+' 隻羊'+((project.temporaryWorkers||[]).length?' · '+project.temporaryWorkers.length+' 位工作代理':'')));caption.setAttribute('aria-label',project.name+'，'+total+' 位代理，'+(project.temporaryWorkers||[]).length+' 位臨時工作代理');caption.dataset.project=project.id;caption.setAttribute('aria-pressed',String(project.id===selection.project));caption.onclick=()=>switchChat(project.id);
   caption.ondragover=e=>{if(dragAgent&&project.id!==selection.project&&!protectedAgent(dragAgent)){e.preventDefault();caption.classList.add('drag-over');}};caption.ondragleave=()=>caption.classList.remove('drag-over');caption.ondrop=e=>{e.preventDefault();caption.classList.remove('drag-over');if(dragAgent&&project.id!==selection.project)openAgentAction(dragAgent,'move',project.id);};
   const titleRow=el('div','project-title-row');
   const edit=el('button','project-edit','✎');edit.type='button';edit.dataset.editProject=project.id;edit.disabled=project.available===false;
@@ -357,7 +378,7 @@ function renderNav(){
   edit.onclick=()=>openProjectEditor(project.id);
   titleRow.append(caption,edit);group.append(titleRow);if(project.id!==selection.project){
    const preview=[...(!project.agentWorkspace?[{id:null,name:project.coordinatorName||'領頭羊',provider:project.coordinatorProvider||'claude',model:project.coordinatorPreferredModel}]:[]),...members];
-   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}nav.append(group);continue;
+   const prefs=project.sidebar,ids=prefs?[...prefs.order.filter(id=>prefs.pinned.includes(id)),...prefs.order.filter(id=>!prefs.pinned.includes(id))]:preview.map(a=>a.id||'__coordinator__');for(const id of ids){const a=preview.find(a=>(a.id||'__coordinator__')===id);if(!a)continue;const b=el('button','project-member-preview');b.type='button';b.dataset.project=project.id;b.dataset.agent=a.id||'__coordinator__';b.append(avatar(a.provider||'claude'));const copy=el('span','member-copy');copy.append(el('strong','member-name',(prefs?.pinned.includes(id)?'Pin · ':'')+a.name));appendModelLabel(copy,modelLabel(a,null,project.lastModels?.[id]),'切換查看狀態');b.append(copy);b.setAttribute('aria-label',project.name+'的'+a.name+'，切換查看狀態');b.onclick=()=>switchChat(project.id,null,a.id);group.append(b);}appendTemporaryWorkers(group,project,query);nav.append(group);continue;
   }
   for(const id of visibleAgentIds()){const a=id==='__coordinator__'?null:members.find(a=>a.id===id);if(id!=='__coordinator__'&&!a)continue;const lead=!a,name=a?.name||state.coordinatorName||'領頭羊',t=a?terminalFor(a):state.terminals.find(t=>t.address===state.control?.terminal),activity=activityFor(a,t),active=lead?!selectedAgent:selectedAgent===id;
    const profile=a||{provider:t?.provider||state.coordinatorProvider||'claude',model:state.coordinatorPreferredModel};
@@ -369,7 +390,7 @@ function renderNav(){
    const more=el('button','member-more','⋯');more.type='button';more.setAttribute('aria-label',name+'的操作選單');more.setAttribute('aria-haspopup','menu');more.setAttribute('aria-expanded','false');more.onclick=()=>menuContext?.id===id?closeAgentMenu():openAgentMenu(id,more);row.append(more);
    row.ondragstart=e=>{if(e.target.closest('.member-more')){e.preventDefault();return;}dragAgent=id;row.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-herdr-agent',id);closeAgentMenu(false);};row.ondragend=()=>{dragAgent=null;row.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(n=>n.classList.remove('drag-over'));};row.ondragover=e=>{if(dragAgent&&dragAgent!==id){e.preventDefault();row.classList.add('drag-over');row.dataset.drop=e.clientY>row.getBoundingClientRect().top+row.offsetHeight/2?'after':'before';}};row.ondragleave=()=>row.classList.remove('drag-over');row.ondrop=e=>{e.preventDefault();row.classList.remove('drag-over');if(dragAgent&&dragAgent!==id)reorderAgent(dragAgent,id,row.dataset.drop==='after');};group.append(row);
   }
-  nav.append(group);
+  appendTemporaryWorkers(group,project,query);nav.append(group);
  }
  if(!state?.projects.length)nav.append(el('div','project-summary','按右上角 ＋ 建立第一個專案。'));
 }
@@ -504,8 +525,9 @@ function renderSkillRequests(agent){
  if(next&&!document.querySelector('dialog[open]'))openSkillConsent(next);
 }
 function render(){
+ if($('worker-detail').open)updateWorkerDialog();
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v47`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v48`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';

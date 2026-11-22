@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {saveRoster,context} from '../team-runtime.mjs';
-import {createECDH,randomBytes,randomUUID} from 'node:crypto';
+import {createECDH,createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from './server.mjs';
 
 test('live updates require authenticated registered scope and report file changes without message content',async t=>{
@@ -385,4 +385,13 @@ test('skill decisions require the authenticated scope, origin and CSRF and do no
  headers['X-Herdr-CSRF']=state.csrfToken;assert.equal((await fetch(base+'skill-decision',{method:'POST',headers:{...headers,Origin:'https://wrong.test'},body})).status,403);
  const result=await(await fetch(base+'skill-decision',{method:'POST',headers,body})).json();assert.equal(result.status,'approved');
  assert(!fs.existsSync(path.join(folder,'.agents/skills/demo')));assert.equal(fs.readdirSync(path.join(c.teamDir,'direct-queue')).length,1);
+});
+
+test('temporary workers appear under their actual project even when another project is selected',async t=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'herdr-workers-api-'))),app=path.join(root,'app'),first=path.join(root,'first'),second=path.join(root,'second');for(const p of [first,second,path.join(app,'web')])fs.mkdirSync(p,{recursive:true});
+ fs.writeFileSync(path.join(app,'web/projects.json'),JSON.stringify([{folder:first,name:'Transcripts',chats:[{id:'chat'}]},{folder:second,name:'Other',chats:[{id:'other'}]}]));
+ const c=context(first,null,null,'chat');fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'control.json'),JSON.stringify({terminal:'tlead'}));fs.writeFileSync(path.join(c.teamDir,'worker-bindings.json'),JSON.stringify({tworker:{owner:'tlead',chat:'chat',name:'Codex'}}));fs.writeFileSync(path.join(c.teamDir,'messages.jsonl'),JSON.stringify({terminal:'tworker',kind:'worker-report',role:'逐字稿員',text:'Read-only progress',time:'2026-11-22T03:00:00Z'})+'\n');
+ const terminal={address:'tworker',cwd:c.cwd,parent:'tlead',state:'live',status:{app:'codex',state:'working'},labels:{'team.owner':'tlead','team.chat':'chat'}};
+ const server=createServer({appHome:app,allowedLogin:'owner@example.test',origin:'https://workers.test',core:args=>{if(args[0]==='ls')return{terminals:[{address:'tworker'}]};if(args[0]==='get'&&args[1]==='tworker')return terminal;throw Error('No other Core action authorized');}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});});
+ const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/state?chat=other&project='+createHash('sha256').update(second).digest('hex').slice(0,20),{headers:{'Tailscale-User-Login':'owner@example.test'}}),s=await response.json();assert.equal(response.status,200,JSON.stringify(s));const project=s.projects.find(p=>p.name==='Transcripts');assert.equal(project.agents.length,0);assert.equal(project.temporaryWorkers[0].name,'逐字稿員');assert.equal(project.temporaryWorkers[0].terminal,'tworker');assert.equal(project.temporaryWorkers[0].lastReport,'Read-only progress');assert(!s.projects.find(p=>p.name==='Other').temporaryWorkers?.length);
 });
