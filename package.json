@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test project-archive.test.mjs web/agent-models.test.mjs web/legacy-workers.test.mjs provider-quota.test.mjs provider-usage.test.mjs direct.test.mjs worker-chat.test.mjs agent-registration.test.mjs reply-recovery.test.mjs checklist.test.mjs team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs web/viewport.test.mjs web/activity.test.mjs web/agent-management.test.mjs web/tasks.test.mjs web/push.test.mjs web/sw.test.mjs",
+    "test": "node --test process-lock.test.mjs project-archive.test.mjs web/agent-models.test.mjs web/legacy-workers.test.mjs provider-quota.test.mjs provider-usage.test.mjs direct.test.mjs worker-chat.test.mjs agent-registration.test.mjs reply-recovery.test.mjs checklist.test.mjs team-runtime.test.mjs background.test.mjs web/server.test.mjs web/format.test.mjs web/viewport.test.mjs web/activity.test.mjs web/agent-management.test.mjs web/tasks.test.mjs web/push.test.mjs web/sw.test.mjs",
     "setup": "node setup.mjs",
     "setup:preview": "node setup.mjs --dry-run"
   },

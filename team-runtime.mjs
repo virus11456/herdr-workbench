@@ -1,3 +1,4 @@
+import {processLock} from './process-lock.mjs';
 import {hookReplyContext,recoverClaudeReplies} from './reply-recovery.mjs';
 import {agentPolicyPrompt,networkPreapproved,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
@@ -250,8 +251,8 @@ function coordinatorCanSwitch(c,control,terminal){
 export function drainChats(c) {
   const dir=path.join(teamDir(c),'chat-queue');
   if(!fs.existsSync(dir)) return {sent:0,pending:0};
-  const lock=path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'chat-delivery.lock');let fd;
-  try{fd=fs.openSync(lock,'wx',0o600);}catch(e){if(e.code==='EEXIST')return{sent:0};throw e;}
+  const release=processLock(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'chat-delivery.lock'));
+  if(!release)return{sent:0,reason:'delivery_locked'};
   try {
     const files=fs.readdirSync(dir).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>({name:n,msg:read(path.join(dir,n))})).sort((a,b)=>(a.msg.sequence||a.msg.createdAt).localeCompare(b.msg.sequence||b.msg.createdAt)||a.name.localeCompare(b.name));
     if(!files.length)return{sent:0,pending:0};
@@ -324,7 +325,7 @@ export function drainChats(c) {
     } catch {
       return{sent:0,pending:files.length,reason:'delivery_paused'};
     }
-  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+  }finally{release();}
 }
 export function drainProject(c) {
   return conversationContexts(c).filter(x=>fs.existsSync(teamDir(x))).map(x=>({chat:x.chat,recovery:recoverClaudeReplies(x),...drain(x),directQueue:drainDirect(x),collaborationQueue:drainCollaboration(x),chatQueue:drainChats(x)}));
@@ -452,7 +453,7 @@ export function executeRequest(c, req) {
     if(a.agentId && !agent) throw new Error('Unknown team agent.');
     const template=agent ? workerTemplates[agent.provider] : a.template;
     if (!Object.values(workerTemplates).includes(template)) throw new Error('Unknown worker template.');
-    if (!/^[a-z0-9_-]{1,32}$/.test(a.name || '') || typeof a.task !== 'string' || !a.task.trim()) throw new Error('A valid worker name and task are required.');
+    if (typeof a.task !== 'string' || !a.task.trim() || (!agent&&!/^[a-z0-9_-]{1,32}$/.test(a.name || ''))) throw new Error('A valid worker name and task are required.');
     const root = fs.realpathSync(c.cwd), cwd = fs.realpathSync(path.resolve(c.cwd, a.cwd || '.'));
     if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error('Worker cwd must remain inside this project.');
     const previous=req.id&&read(path.join(teamDir(c),'agent-registrations.json'))?.[req.id];
@@ -519,9 +520,8 @@ async function response(c, id) {
 export function register(c, role, preferred=false) {
   if (!c.terminal) return { registered: false, reason: 'not_in_herdr' };
   const p = paths(c), registrationLock = path.join(p.dir, 'register.lock');
-  let registration;
-  try { registration = fs.openSync(registrationLock, 'wx', 0o600); }
-  catch (e) { if (e.code === 'EEXIST') throw new Error('Another coordinator is being registered; retry from the panel.'); throw e; }
+  const releaseRegistration=processLock(registrationLock);
+  if(!releaseRegistration)throw new Error('Another coordinator is being registered; retry from the panel.');
   try {
   const old = read(p.control);
   if (old?.terminal && old.terminal !== c.terminal) {
@@ -537,12 +537,12 @@ export function register(c, role, preferred=false) {
   save(p.control, state);
   log(c, role, role === 'claude' ? 'Claude 主總控已連線。' : preferred?'Codex 領頭羊已連線。':'Codex 備援總控已連線；先讀交接紀錄再接手。');
   return state;
-  } finally { fs.closeSync(registration); fs.unlinkSync(registrationLock); }
+  } finally { releaseRegistration(); }
 }
 export function takeover(c, reason, automatic = false) {
   const p = paths(c);
-  let fd;
-  try { fd = fs.openSync(p.lock, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') return { switched: false, reason: 'transition_in_progress' }; throw e; }
+  const releaseTransition=processLock(p.lock);
+  if(!releaseTransition)return { switched: false, reason: 'transition_in_progress' };
   try {
     const old = read(p.control);
     if (!old?.terminal || old.role !== 'claude' || (c.terminal && old.terminal !== c.terminal)) return { switched: false, reason: 'not_active_claude' };
@@ -571,7 +571,7 @@ export function takeover(c, reason, automatic = false) {
     save(p.control, { ...handoff, terminal: made.terminal, tab: made.tab, phase: 'active' });
     log(c, '系統', `${automatic ? '自動' : '手動'}切換至 Codex 備援總控：${reason}；終端 ${made.terminal}。`);
     return { switched: true, terminal: made.terminal, reason };
-  } finally { fs.closeSync(fd); fs.unlinkSync(p.lock); }
+  } finally { releaseTransition(); }
 }
 export function handleFailure(event, c) {
   if (event.hook_event_name !== 'StopFailure' || !recoverable.has(event.error)) return { switched: false, reason: 'not_a_recoverable_api_failure' };

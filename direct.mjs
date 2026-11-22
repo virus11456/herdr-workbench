@@ -1,3 +1,4 @@
+import {processLock} from './process-lock.mjs';
 import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-chat.mjs';
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
@@ -7,9 +8,9 @@ const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.c
 const save=(p,v)=>{fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});const tmp=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(v),{mode:0o600});fs.renameSync(tmp,p);};
 const heldLocks=new Set();
 function withState(c,action,file=path.join(c.teamBase||c.teamDir,'direct-state.lock')){
- if(heldLocks.has(file))return action();fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});let fd;
- for(let i=0;i<400;i++){try{fd=fs.openSync(file,'wx',0o600);fs.writeFileSync(fd,String(process.pid));break;}catch(error){if(error.code!=='EEXIST')throw error;try{const pid=Number(fs.readFileSync(file,'utf8'));if(Number.isInteger(pid)&&pid>0){try{process.kill(pid,0);}catch(e){if(e.code==='ESRCH'){fs.unlinkSync(file);continue;}}}}catch{}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);}}
- if(fd===undefined)throw Error('另一筆代理回報正在保存，請稍後重試。');heldLocks.add(file);try{return action();}finally{heldLocks.delete(file);fs.closeSync(fd);fs.unlinkSync(file);}
+ if(heldLocks.has(file))return action();fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});let release;
+ for(let i=0;i<400;i++){release=processLock(file);if(release)break;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);}
+ if(!release)throw Error('另一筆代理回報正在保存，請稍後重試。');heldLocks.add(file);try{return action();}finally{heldLocks.delete(file);release();}
 }
 export function withWorkerState(c,action){return withState(c,action);}
 export function withRosterState(c,action){return withState(c,action,path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'roster-state.lock'));}
@@ -60,11 +61,8 @@ export function actOnChatTask(c,{id,action}){
  if(!validMessageId(id)||!['cancel','stop'].includes(action))throw Error('任務操作無效。');
  return withState(c,()=>{
   const lock=path.join(c.teamBase,'chat-delivery.lock');
-  let fd;
-  try{fd=fs.openSync(lock,'wx',0o600);}catch(error){
-   if(error.code==='EEXIST')throw taskConflict('任務正在交付，請更新狀態後再試。');
-   throw error;
-  }
+  const release=processLock(lock);
+  if(!release)throw taskConflict('任務正在交付，請更新狀態後再試。');
   try{
    const direct=queueFile(c,id,true),legacy=queueFile(c,id,false);
    const archive=action==='cancel'?'.cancelled':'.stopped';
@@ -99,7 +97,7 @@ export function actOnChatTask(c,{id,action}){
    binding.awaitingReply=false;
    save(bindingFile,bindings);
    return{status:'stopped'};
-  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+  }finally{release();}
  });
 }
 export function directTerminal(c,id){
@@ -451,7 +449,7 @@ export function agentCreationPrompt(grant){
 export function drainDirect(c){return withState(c,()=>sendDirect(c));}
 function sendDirect(c){
  const dir=path.join(c.teamDir,'direct-queue');if(!fs.existsSync(dir)&&!fs.existsSync(path.join(c.teamDir,'collaborations.json')))return{sent:0};
- const lock=path.join(c.teamBase,'chat-delivery.lock');let fd;try{fd=fs.openSync(lock,'wx',0o600);}catch(e){if(e.code==='EEXIST')return{sent:0};throw e;}
+ const release=processLock(path.join(c.teamBase,'chat-delivery.lock'));if(!release)return{sent:0,reason:'delivery_locked'};
  try{
   provisionAgents(c);
   if(!fs.existsSync(dir))return{sent:0};
@@ -502,7 +500,7 @@ function sendDirect(c){
   c.run('hc',['send',id,prompt]);bindings[id].delivered=true;save(file,bindings);save(path.join(c.teamDir,'direct-delivery.json'),{terminal:id,time:Date.now()});fs.renameSync(path.join(dir,item.name),path.join(dir,item.name+'.sent'));log(c,'系統','訊息已直接送到 '+agent.name+'。','delivery',{messageId:item.id,delivery:'sent',target:agent.id,direct:true,provider:agent.provider});return{sent:1,terminal:id};
   }
   return blocked||{sent:0};
- }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+ }finally{release();}
 }
 export function bindNativeSession(c,sessionId){return withState(c,()=>{
  const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file);
