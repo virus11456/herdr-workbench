@@ -2,7 +2,7 @@ import {agentPolicyPrompt,networkPreapproved} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
-import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState,mirrorWorkerReport,settleWorkerTurn,reserveWorkerTurn} from './direct.mjs';
+import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState,mirrorWorkerReport,settleWorkerTurn,reserveWorkerTurn,launchWorkerMember,reconcileWorkerMembers,withWorkerState,recoverWorkerBinding} from './direct.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -60,11 +60,22 @@ export function validateRoster(value) {
   });
 }
 export function roster(c) { return validateRoster(read(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json')) ?? read(path.join(teamDir(c),'roster.json')) ?? defaultRoster()); }
+export function validateMembership(c,value,current=roster(c)){
+ const agents=validateRoster(value).map(a=>a.provider==='claude'&&a.model===undefined&&!current.some(old=>old.id===a.id&&old.provider==='claude')?{...a,model:'claude-opus-5-5'}:a),normalize=name=>name.normalize('NFKC').toLowerCase(),profile=coordinatorProfile(c);
+ for(const a of agents){
+  if(current.some(old=>old.id===a.id&&normalize(old.name)===normalize(a.name)))continue;
+  if(agents.some(other=>other.id!==a.id&&normalize(other.name)===normalize(a.name))||(!profile.agentId&&a.id!=='starter'&&normalize(profile.name||'領頭羊')===normalize(a.name)))throw Error('專案已有同名代理，請使用原成員或改用不同名稱。');
+ }
+ return agents;
+}
 export function saveRoster(c,value) {
   return withRosterState(c,()=>{
-    const current=roster(c),agents=validateRoster(typeof value==='function'?value(current):value);
+    const current=roster(c),agents=validateMembership(c,typeof value==='function'?value(current):value,current);
     if(current.some(a=>a.id==='starter')&&!agents.some(a=>a.id==='starter'))throw Error('預設領頭羊不能刪除；可以改名、設定模型或另外任命協調者。');
-    save(path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json'),agents);
+    const file=path.join(c.teamBase || path.join(c.cwd,'.herdr-team'),'roster.json');
+    const original=read(file)??read(path.join(teamDir(c),'roster.json'))??[];
+    const preserved=agents.map(a=>{const value={...original.find(old=>old.id===a.id),...a};if(!Object.hasOwn(a,'model'))delete value.model;return value;});
+    save(file,preserved);
     const profile=coordinatorProfile(c);if(profile.agentId){const selected=agents.find(a=>a.id===profile.agentId);save(path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'coordinator.json'),{...profile,agentId:selected?.id||null,...(selected?{name:selected.name}:{})});}
     return {agents,saved:true,started:false};
   });
@@ -161,7 +172,7 @@ export async function switchModel(c, model, pause = delay) {
   }
   throw new Error('尚未收到模型切換成功的確認。請點「查看確認」查看 Claude 提示；目前選擇未標示為成功。');
 }
-export function context(cwd = process.cwd(), terminal = process.env.HC_TERMINAL_ID, run, chat = process.env.HERDR_TEAM_CHAT_ID || null, options) {
+export function context(cwd = process.env.HERDR_TEAM_PROJECT_ROOT || process.cwd(), terminal = process.env.HC_TERMINAL_ID, run, chat = process.env.HERDR_TEAM_CHAT_ID || null, options) {
   if (chat && !validChat(chat)) throw new Error('Invalid conversation ID.');
   const root = fs.realpathSync(path.resolve(cwd));
   if(!options)options=process.env.HERDR_WORKBENCH_HOME ? read(path.join(process.env.HERDR_WORKBENCH_HOME,'service.json')) || {} : {};
@@ -338,8 +349,9 @@ export function captureReply(event, c, role, usageSource) {
 function titleMetadata(text) {
  try {const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===1&&typeof value.title==='string';}catch{return false;}
 }
-function captureWorkerReply(event,c,role,control,usageSource) {
+function captureWorkerReply(event,c,role,control,usageSource) {return withWorkerState(c,()=>{
  if(!(['Codex','Antigravity','MiniMax'].includes(role)&&event.type==='agent-turn-complete'||role==='Claude'&&event.hook_event_name==='Stop')||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
+ recoverWorkerBinding(c);
  const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{},binding=bindings[c.terminal];
  if(!binding||binding.owner!==control.terminal||binding.chat!==(c.chat||'legacy'))return{captured:false,reason:'unregistered_worker'};
  const worker=c.run('hc',['get',c.terminal]);
@@ -348,13 +360,14 @@ function captureWorkerReply(event,c,role,control,usageSource) {
  if(titleMetadata(text))return{captured:false,reason:'session_title_metadata'};
  const hash=createHash('sha256').update(String(event['turn-id']??worker.turn??'')+'\n'+text).digest('hex');
  if(binding.captureHash===hash)return{captured:false,reason:'duplicate'};
+ binding.capturedAt=Date.now();
  if(worker.cwd===c.cwd&&['codex','antigravity','mcode','minimax'].includes(worker.status?.app))saveProviderUsage(c,usageProvider[role],event,usageSource);
  let explicit=false;
  try{explicit=fs.readFileSync(path.join(teamDir(c),'messages.jsonl'),'utf8').trim().split('\n').slice(-200).some(line=>{const e=JSON.parse(line);return e.terminal===c.terminal&&e.kind==='worker-report'&&!['codex-notify','antigravity-stop','minimax-stop'].includes(e.via)&&!titleMetadata(e.text)&&Date.parse(e.time)>=binding.sentAt;});}catch{}
  settleWorkerTurn(c);
  if(explicit){binding.captureHash=hash;save(file,bindings);return{captured:false,reason:'explicit_report_already_sent'};}
  const result=report(c,control.terminal,binding.name||role,text,{via:{Codex:'codex-notify',Antigravity:'antigravity-stop',MiniMax:'minimax-stop'}[role]});binding.captureHash=hash;save(file,bindings);return {captured:true,...result};
-}
+});}
 export function report(c, target, role, text, metadata={}) {
   if (!/^t[a-z0-9]+$/.test(target || '')) throw new Error('A local coordinator terminal ID is required.');
   const activeDirect=read(path.join(teamDir(c),'direct-bindings.json'))?.[c.terminal];
@@ -372,9 +385,10 @@ export function report(c, target, role, text, metadata={}) {
   return { queued: true, id };
 }
 export function drain(c) {
+  const registrations = reconcileWorkerMembers(c);
   const requestsProcessed = drainRequests(c);
   const dir = path.join(teamDir(c), 'outbox');
-  if (!fs.existsSync(dir)) return { delivered: 0, errors: [], requestsProcessed };
+  if (!fs.existsSync(dir)) return { delivered: 0, errors: [], requestsProcessed, registrations };
   let delivered = 0;
   const errors = [];
   for (const name of fs.readdirSync(dir).filter(x => /^[a-f0-9-]+\.json$/.test(x))) {
@@ -394,7 +408,7 @@ export function drain(c) {
       errors.push(String(e.message));
     }
   }
-  return { delivered, errors, requestsProcessed };
+  return { delivered, errors, requestsProcessed, registrations };
 }
 export function request(c, action, args) {
   if (!c.terminal) throw new Error('Requests must originate in a Herdr terminal.');
@@ -426,25 +440,25 @@ export function executeRequest(c, req) {
     if (!/^[a-z0-9_-]{1,32}$/.test(a.name || '') || typeof a.task !== 'string' || !a.task.trim()) throw new Error('A valid worker name and task are required.');
     const root = fs.realpathSync(c.cwd), cwd = fs.realpathSync(path.resolve(c.cwd, a.cwd || '.'));
     if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error('Worker cwd must remain inside this project.');
-    const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
-    const command=`herdr-team-runtime${c.chat ? ' --chat '+c.chat : ''} report ${control.terminal} ${quote(agent?.name || '代理')} '<摘要>'`;
-    const task=(agent ? `你是 ${agent.name}（${agent.id}），${agent.group?`分組：${agent.group}。`:""}職責：${agent.brief}。代理可提出協作、指派建議、追蹤與驗收；以回報命令向總控提出「協作請求：目標代理、任務、驗收條件」，等待總控派工與轉回結果。不得自行啟動其他代理。\n` : '')+
-      `本對話回報命令：${command}；交接資料在 ${teamDir(c)}/。\n${a.task}`;
-    const labels=['--label',`team.chat=${c.chat || 'legacy'}`,'--label',`team.owner=${control.terminal}`,...(agent?['--label',`team.agent=${agent.id}`]:[])];
-    if(agent) {
+    if(agent&&!(req.id&&read(path.join(teamDir(c),'agent-registrations.json'))?.[req.id])) {
       for(const [id,binding] of Object.entries(read(path.join(teamDir(c),'direct-bindings.json'))||{})){if(binding.agentId!==agent.id||binding.retired)continue;try{if(directTerminal(c,id)?.t.state==='live')throw new Error('This agent already has a live terminal; inspect or send to it instead of starting a duplicate.');}catch(error){if(!missingTerminal(error))throw error;}}
-      const all=c.run('hc',['ls','--json','--label',`team.agent=${agent.id}`,'--label',`team.chat=${c.chat||'legacy'}`]);
+      const all=c.run('hc',['ls','--json','--label',`team.agent=${agent.id}`]);
       const duplicate=(Array.isArray(all)?all:all.terminals||[]).some(t=>{
         const full=c.run('hc',['get',t.address||t.id||t.terminal]);
-        return [control.terminal,control.previousTerminal].filter(Boolean).includes(full.parent) && full.state==='live';
+        return full.state==='live'&&([control.terminal,control.previousTerminal].filter(Boolean).includes(full.parent)||!full.parent&&full.labels?.['team.direct']==='true'&&full.cwd===c.cwd||full.labels?.['team.project']===c.cwd);
       });
       if(duplicate)throw new Error('This agent already has a live terminal; inspect or send to it instead of starting a duplicate.');
     }
-    const made=c.run('hc', ['run', '--bg', '--name', a.name, '--cwd', cwd, '--parent', control.terminal,...labels, template, task]);
-    const workerId=made.terminal||made.address;
-    if(/^t[a-z0-9]+$/.test(workerId||'')){const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{};bindings[workerId]={owner:control.terminal,chat:c.chat||'legacy',name:agent?.name||(template==='herdr-codex-implement'?'Codex':'代理'),sentAt:Date.now()};save(file,bindings);}
-    log(c,'總控',`${made.first_message?.sent===false?'代理已開啟，任務尚未送達':'已派工'}${agent ? '給 '+agent.name : ''}：${a.task.slice(0,160)}`,'assignment',{agentId:agent?.id||null,terminal:made.terminal||made.address||null});
-    return made;
+    const provider=Object.keys(workerTemplates).find(key=>workerTemplates[key]===template);
+    return launchWorkerMember(c,{agent,provider,name:a.name,displayName:a.displayName,brief:a.brief,model:a.model,task:a.task,cwd,owner:control.terminal,requestId:req.id},(member,creation)=>{
+      const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
+      const command=`herdr-team-runtime${c.chat ? ' --chat '+c.chat : ''} report ${control.terminal} ${quote(member.name)} '<摘要>'`;
+      const task=`你是 ${member.name}（${member.id}）。職責：${member.brief}。本次派工者為總控，先完成此項工作並以指定命令回報；使用者之後可在你的對話直接交辦，工作台會依序交付。不得自行啟動其他代理。\n本對話回報命令：${command}；專案根目錄：${c.cwd}；交接資料在 ${teamDir(c)}/。\n${a.task}`;
+      const labels=['--label',`team.chat=${c.chat || 'legacy'}`,'--label',`team.owner=${control.terminal}`,'--label',`team.agent=${member.id}`,'--label',`team.creation=${creation}`,'--label',`team.project=${c.cwd}`];
+      const made=c.run('hc',['run','--bg','--name',a.name,'--cwd',cwd,'--parent',control.terminal,...labels,template,task]);
+      log(c,'總控',`${made.first_message?.sent===true?'已確認送達':'代理已開啟，任務送達尚未確認'}給 ${member.name}：${a.task.slice(0,160)}`,'assignment',{agentId:member.id,terminal:made.terminal||made.address||null});
+      return made;
+    });
   }
   if (!['get', 'read', 'wait', 'send', 'interrupt'].includes(req.action)) throw new Error('Unsupported coordinator operation.');
   if (!/^t[a-z0-9]+$/.test(a.terminal || '')) throw new Error('A local worker terminal is required.');
@@ -457,7 +471,7 @@ export function executeRequest(c, req) {
   if (req.action === 'send') {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('A message is required.');
     reserveWorkerTurn(c,a.terminal,terminal);
-    const result=c.run('hc', ['send', a.terminal, a.text]);const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{};if(bindings[a.terminal]){bindings[a.terminal].sentAt=Date.now();save(file,bindings);}return result;
+    const result=c.run('hc', ['send', a.terminal, a.text]);withWorkerState(c,()=>{const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{};if(bindings[a.terminal]){bindings[a.terminal].sentAt=Date.now();save(file,bindings);}});return result;
   }
   return c.run('hc', ['interrupt', a.terminal]);
 }

@@ -123,7 +123,7 @@ test('MiniMax native Stop without inherited Herdr environment binds only an unam
  const logs=fs.readFileSync(path.join(c.teamDir,'messages.jsonl'),'utf8').trim().split('\n').map(JSON.parse);assert.equal(logs.length,1);assert.equal(logs[0].text,'9');assert.equal(logs[0].target,'mini-one');assert.equal(JSON.parse(fs.readFileSync(file)).tunitone.minimaxSessionId,'unit-session');
  const updated=JSON.parse(fs.readFileSync(file));updated.tunitone.awaitingReply=true;fs.writeFileSync(file,JSON.stringify(updated));assert.equal(minimaxReply({...event,session_id:'new-unbound',last_assistant_message:'9'},home,run).reason,'ambiguous_terminal');
  assert.equal(minimaxReply({...event,last_assistant_message:'9 <herdr-reply-id>'+other+'</herdr-reply-id>'},home,run).reason,'no_matching_terminal');
- const outside=path.join(root,'outside');fs.mkdirSync(outside);assert.equal(minimaxReply({...event,cwd:outside},home,run).reason,'unregistered_project');
+ const outside=path.join(root,'outside');fs.mkdirSync(outside);assert.equal(minimaxReply({...event,cwd:outside},home,run).reason,'no_matching_terminal');
 });
 test('quoted or fenced action examples stay text and never dispatch work',t=>{
  const {c}=fixture(t);c.terminal='tunitdirect';fs.mkdirSync(c.teamDir,{recursive:true});fs.writeFileSync(path.join(c.teamDir,'direct-bindings.json'),JSON.stringify({tunitdirect:{agentId:'engineer',chat:c.chat}}));

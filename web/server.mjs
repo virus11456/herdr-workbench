@@ -11,7 +11,7 @@ import {artifactReferences,driveArtifactLink,readArtifact} from './artifacts.mjs
 import {messageWithAttachments,uploadAttachment} from './attachments.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
-import {enqueueDirect,adoptWorkerChat,decideSkillRequest,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
+import {enqueueDirect,adoptWorkerChat,pendingRegistrations,decideSkillRequest,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -27,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-collab51',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-agents52',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -247,6 +247,7 @@ export function createServer(config) {
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
     const directQueue=path.join(c.teamDir,'direct-queue'),pendingAgents=fs.existsSync(directQueue)?[...new Set(fs.readdirSync(directQueue).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>read(path.join(directQueue,n))?.agentId).filter(Boolean))]:[];
     const owner=terminals.find(t=>t.address===control?.terminal),stoppedAgents=roster(c).filter(a=>{const t=terminals.filter(t=>t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===a.id).at(-1),b=t&&direct[t.address];return t?.state==='finished'&&b&&!b.retired&&!b.retryRequested&&!b.delivered&&!b.captureHash;}).map(a=>a.id);
+    for(const r of pendingRegistrations(c))if(!stoppedAgents.includes(r.agentId))stoppedAgents.push(r.agentId);
     const taskList=checklist(c);taskList.items=taskList.items.map(item=>({...item,artifacts:publicArtifacts(item)}));
     const jobs=Object.values(read(path.join(c.teamDir,'collaborations.json'),{})),members=roster(c),profile=coordinatorProfile(c);
     const name=id=>members.find(a=>a.id===id)?.name||id||profile.name;
@@ -302,7 +303,7 @@ export function createServer(config) {
       write(modelFile(p),current);
     }catch{}
     const coordinatorView=terminalViews.find(t=>t.address===owner?.address);
-    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>publicJob(j,direct,chat)),projectCollaborations,messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
+    return {...release,skillRequests:p.chats.flatMap(entry=>{const scope=entry.id===chat?c:ctx(p.folder,null,undefined,entry.id==='legacy'?null:entry.id);return skillRequests(scope).map(r=>({...r,chat:entry.id}));}),accountQuotas,projects:summary,project:p.id,chat,agents:roster(c),sidebar:sidebarState(c,!!p.agentWorkspace),rosterRevision:rosterRevision(c),agentWorkspace:!!p.agentWorkspace||!!profile.agentId,coordinatorAgentId:profile.agentId||null,coordinatorName:profile.name,coordinatorProvider:profile.provider||(control?.role==='codex'?'codex':'claude'),agentCreationEnabled:c.privateState,registrationPendingAgents:pendingRegistrations(c).map(r=>r.agentId),coordinatorPreferredModel:selectedModel(c),coordinatorModel:coordinatorView?.model||null,pendingAgents,stoppedAgents,coordinatorReady:!!owner?.status?.app,coordinatorParked,startupStopped:coordinatorMissing||(owner?.state==='finished'&&!owner?.status?.app),checklist:taskList,collaborations:jobs.map(j=>publicJob(j,direct,chat)),projectCollaborations,messages,messagesRevision,usage:conversationUsage(messages,providerUsageRecords(c)),projectMemory:projectMemory(c),taskControls:chatTaskControls(c,messages,terminals,direct),control:control?{terminal:control.terminal,role:control.role,phase:control.phase}:null,
       terminals:terminalViews,coreError,appOpen,backendMode:config.headless?'background':'desktop',drive:storageStatus(config),csrfToken:csrf,host:os.hostname(),...(timeline?{timeline}:{})};
   };
   const contentTypes={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
@@ -314,7 +315,7 @@ export function createServer(config) {
     const dirs=p.chats.map(entry=>entry.id==='legacy'?c.teamBase:path.join(c.teamBase,'conversations',entry.id));
     const files=[path.join(home,'web/projects.json'),path.join(home,'service-status.json'),c.teamBase,path.join(c.teamBase,'conversations'),
       ...['roster.json','coordinator.json','sidebar.json','checklist.json','project-memory.json'].map(n=>path.join(c.teamBase,n)),
-      ...dirs.flatMap(dir=>[dir,...['messages.jsonl','collaborations.json','direct-bindings.json','control.json','model.json','skill-requests.json','direct-queue'].map(n=>path.join(dir,n))])];
+      ...dirs.flatMap(dir=>[dir,...['messages.jsonl','collaborations.json','agent-registrations.json','direct-bindings.json','control.json','model.json','skill-requests.json','direct-queue'].map(n=>path.join(dir,n))])];
     const key=JSON.stringify(files),now=Date.now(),cached=updateStamps.get(key);
     if(cached&&now-cached.at<800)return cached.value;
     const value=files.map(file=>{try{const st=fs.statSync(file,{bigint:true});return [st.ino,st.size,st.mtimeNs,st.ctimeNs].join(':');}catch(error){return error.code;}}).join('|');

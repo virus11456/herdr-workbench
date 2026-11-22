@@ -4,5 +4,7 @@ export PATH="$HOME/.local/bin:$PATH"
 if [ -n "${HC_TERMINAL_ID:-}" ]; then
   HERDR_TEAM_CHAT_ID=$("$HOME/.local/bin/hc" get "$HC_TERMINAL_ID" | @NODE_SHELL@ -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{const chat=JSON.parse(s).labels?.["team.chat"];process.stdout.write(chat&&chat!=="legacy"?chat:"");});')
   export HERDR_TEAM_CHAT_ID
+  HERDR_TEAM_PROJECT_ROOT=$("$HOME/.local/bin/hc" get "$HC_TERMINAL_ID" | @NODE_SHELL@ -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{const t=JSON.parse(s);process.stdout.write(t.labels?.["team.project"]||t.cwd||"");});')
+  export HERDR_TEAM_PROJECT_ROOT
 fi
 exec "$HOME/.local/bin/mcode" "$@"

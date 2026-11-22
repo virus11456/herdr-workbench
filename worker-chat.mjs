@@ -3,7 +3,8 @@ const read=file=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){
 export function workerProvider(t){return ({claude:'claude','claude-code':'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'})[t?.status?.app]||null;}
 export function verifiedLegacyWorker(c,id,t,agentId){
  const binding=read(path.join(c.teamDir,'worker-bindings.json'))?.[id];
- if(!/^t[a-z0-9]+$/.test(id||'')||!binding||binding.chat!==(c.chat||'legacy')||t?.address!==id||t.cwd!==c.cwd||t.parent!==binding.owner||t.labels?.['team.owner']!==binding.owner||t.labels?.['team.chat']!==binding.chat||t.labels?.['team.direct']==='true')return null;
+ const cwd=binding?.cwd||c.cwd;
+ if(!/^t[a-z0-9]+$/.test(id||'')||!binding||binding.chat!==(c.chat||'legacy')||t?.address!==id||t.cwd!==cwd||path.resolve(cwd)!==cwd||!(cwd===c.cwd||cwd.startsWith(c.cwd+path.sep))||t.parent!==binding.owner||t.labels?.['team.owner']!==binding.owner||t.labels?.['team.chat']!==binding.chat||t.labels?.['team.direct']==='true')return null;
  if(agentId&&(binding.agentId!==agentId||t.labels?.['team.agent']&&t.labels['team.agent']!==agentId))return null;
  return binding;
 }

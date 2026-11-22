@@ -5,7 +5,7 @@ import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-collab51';
+const UI_BUILD='20261122-agents52';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -20,6 +20,7 @@ function modelLabel(agent,terminal,last){
 }
 const activeProject=()=>state?.projects.find(p=>p.id===selection.project);
 const sidebarStatus=(agent,terminal)=>{
+ if(state?.registrationPendingAgents?.includes(agent.id))return '啟動結果待核對';
  if(!terminal)return '收到訊息後啟動';
  if(terminal.state==='live'&&terminal.status?.state==='done'&&!terminal.waitingCollaboration)return '待命';
  return agentStatus(agent,terminal);
@@ -90,7 +91,7 @@ document.documentElement.addEventListener('pointerleave',resetSheep);window.addE
 const currentAgent=()=>state?.agents.find(a=>a.id===selectedAgent);
 const terminalFor=a=>state?.terminals.findLast(t=>t.agentId===a.id&&t.direct&&(!t.provider||t.provider===a.provider))||state?.terminals.findLast(t=>t.agentId===a.id&&!t.direct&&(!t.provider||t.provider===a.provider));
 const status=t=>!t?'可開始對話':t.state==='finished'?'已結束':t.parked?'待命，收到訊息後啟動':t.waitingCollaboration?'等待協作回報':!t.status?.app&&typeof t.status!=='string'?'啟動中，請查看主機提示':({working:'處理中',blocked:'等待你確認',idle:'待命',done:'回合結束',error:'發生錯誤'}[typeof t.status==='string'?t.status:t.status?.state]||'已啟動 · 狀態未回報');
-const agentStatus=(a,t)=>!t&&state?.pendingAgents?.includes(a.id)?'啟動中':status(t);
+const agentStatus=(a,t)=>state?.registrationPendingAgents?.includes(a.id)?'啟動結果待核對':!t&&state?.pendingAgents?.includes(a.id)?'啟動中':status(t);
 const activityFor=(a,t)=>agentActivity(t,{pending:!!a&&state?.pendingAgents?.includes(a.id),starting:!a&&state?.control?.phase==='starting'});
 function animateSheep(node,activity){node.classList.toggle('is-starting',activity==='starting');node.classList.toggle('is-working',activity==='working');}
 let progressSnapshot='';
@@ -605,7 +606,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v51`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v52`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -615,7 +616,7 @@ function render(){
  $('recipient').textContent=agent?`交給 ${agent.name}`:'專案協作';
  $('edit-agent').hidden=true;
  $('status').textContent=state.coreError||(!state.appOpen?(state.backendMode==='background'?'背景服務未就緒，請查看主機設定':'請在主機開啟 Herdr，面板才會處理訊息'):state.startupStopped?'總控啟動已停止，等待你重新開啟':agent?`${providerName(agent.provider)} · ${agentStatus(agent,live)}`:live&&state.coordinatorReady===false?'總控尚未就緒，請在主機查看登入或資料夾信任提示':live?`總控 · ${status(live)}`:'隨時可以開始');
- $('retry-start').hidden=agent?!(state.stoppedAgents||[]).includes(agent.id):!state.startupStopped;$('retry-start').textContent=agent?'重新開啟代理':'重新開啟總控';
+ $('retry-start').hidden=agent?!(state.stoppedAgents||[]).includes(agent.id):!state.startupStopped;$('retry-start').textContent=agent?(state.registrationPendingAgents?.includes(agent.id)?'核對啟動結果':'重新開啟代理'):'重新開啟總控';
  if(!agent&&state.coordinatorParked&&!state.coreError&&state.appOpen)$('status').textContent='領頭羊待命，收到訊息後續接會話';
  $('counts').hidden=state.terminals.length===0;
  $('counts').textContent=`${state.agents.length+(state.agentWorkspace?0:1)} 位成員 · ${state.terminals.filter(t=>t.state==='live').length} 個執行中終端`;
@@ -955,7 +956,7 @@ $('copy-layout').onclick=async()=>{
 
 $('copy-chat-link').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);notice('已複製目前專案與對話連結；在另一台同 Tailnet 裝置開啟即可。');}catch{notice('請複製目前網址，連結已包含專案與對話位置。');}};
 
-$('retry-start').onclick=async()=>{const button=$('retry-start');button.disabled=true;try{await api(currentAgent()?'retry-agent':'retry-start',currentAgent()?{agentId:currentAgent().id}:{});notice('已請求重新開啟；登入、信任與權限仍需你親自確認。');await refresh();}catch(error){notice(error.message);}finally{button.disabled=false;}};
+$('retry-start').onclick=async()=>{const button=$('retry-start');button.disabled=true;try{await api(currentAgent()?'retry-agent':'retry-start',currentAgent()?{agentId:currentAgent().id}:{});notice('已請求核對啟動；登入、信任與權限仍需你親自確認。');await refresh();}catch(error){notice(error.message);}finally{button.disabled=false;}};
 
 $('agent-provider').onchange=()=>{
  const provider=$('agent-provider').value;

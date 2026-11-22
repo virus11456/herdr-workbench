@@ -2,7 +2,7 @@ import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
-import {roster,saveRoster,validateRoster,coordinatorProfile,canCreateAgent,canProvisionForMessage,log,missingTerminal} from './team-runtime.mjs';
+import {roster,saveRoster,validateRoster,validateMembership,coordinatorProfile,canCreateAgent,canProvisionForMessage,log,missingTerminal} from './team-runtime.mjs';
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
 const save=(p,v)=>{fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});const tmp=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(v),{mode:0o600});fs.renameSync(tmp,p);};
 const heldLocks=new Set();
@@ -11,6 +11,7 @@ function withState(c,action,file=path.join(c.teamDir,'direct-state.lock')){
  for(let i=0;i<400;i++){try{fd=fs.openSync(file,'wx',0o600);fs.writeFileSync(fd,String(process.pid));break;}catch(error){if(error.code!=='EEXIST')throw error;try{const pid=Number(fs.readFileSync(file,'utf8'));if(Number.isInteger(pid)&&pid>0){try{process.kill(pid,0);}catch(e){if(e.code==='ESRCH'){fs.unlinkSync(file);continue;}}}}catch{}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);}}
  if(fd===undefined)throw Error('另一筆代理回報正在保存，請稍後重試。');heldLocks.add(file);try{return action();}finally{heldLocks.delete(file);fs.closeSync(fd);fs.unlinkSync(file);}
 }
+export function withWorkerState(c,action){return withState(c,action);}
 export function withRosterState(c,action){return withState(c,action,path.join(c.teamBase||path.join(c.cwd,'.herdr-team'),'roster-state.lock'));}
 function actionable(text,match){
  let fence=null;const before=text.slice(0,match.index);for(const line of before.split('\n')){const marker=line.match(/^ {0,3}(`{3,}|~{3,})/);if(!marker)continue;if(!fence)fence=marker[1];else if(marker[1][0]===fence[0]&&marker[1].length>=fence.length)fence=null;}
@@ -109,23 +110,112 @@ export function directTerminal(c,id){
  }else if(t.cwd!==c.cwd||t.parent||t.labels?.['team.direct']!=='true'||t.labels?.['team.agent']!==binding.agentId||t.labels?.['team.chat']!==binding.chat)throw Error('Foreign direct terminal.');
  return{binding,t};
 }
+function registrationBackup(c,files){
+ const folder=path.join(c.teamBase,'registration-backups',new Date().toISOString().replaceAll(':','-')+'-'+randomUUID().slice(0,8));
+ fs.mkdirSync(folder,{recursive:true,mode:0o700});save(path.join(folder,'before.json'),files.map(file=>({file,content:fs.existsSync(file)?fs.readFileSync(file,'utf8'):null})));return folder;
+}
 export function adoptWorkerChat(c,terminal){return withRosterState(c,()=>withState(c,()=>{
  const id=terminal.address,worker=verifiedLegacyWorker(c,id,terminal),control=read(path.join(c.teamDir,'control.json'));
- if(!worker||!['live','finished'].includes(terminal.state)||!workerProvider(terminal)||![control?.terminal,control?.previousTerminal].includes(worker.owner))throw Error('無法核對這位工作代理的專案與派工歸屬。');
+ const actualProvider=workerProvider(terminal),provider=actualProvider||worker?.provider;
+ if(worker?.agentId&&terminal.labels?.['team.agent']&&terminal.labels['team.agent']!==worker.agentId)throw Error('工作代理標籤與登記不符。');
+ if(!worker||!['live','finished'].includes(terminal.state)||!['claude','codex','minimax','antigravity'].includes(provider)||![control?.terminal,control?.previousTerminal].includes(worker.owner))throw Error('無法核對這位工作代理的專案與派工歸屬。');
  const members=roster(c),bindingsFile=path.join(c.teamDir,'direct-bindings.json'),bindings=read(bindingsFile)||{};
- if(worker.agentId){if(!members.some(a=>a.id===worker.agentId)||bindings[id]?.agentId!==worker.agentId||bindings[id].legacyOwner!==worker.owner)throw Error('工作代理的登記尚未一致，請查看主機紀錄。');return{agentId:worker.agentId,terminal:id,reused:true};}
+ const identity=worker.agentId||terminal.labels?.['team.agent'];
+ const reports=workerPublicReports(c,id);
+ if(worker.agentId&&bindings[id]){
+  if(bindings[id].retired||!members.some(a=>a.id===worker.agentId))throw Error('這位代理已移動或刪除，不重新登記。');
+  if(bindings[id].agentId!==worker.agentId||bindings[id].legacyOwner!==worker.owner)throw Error('工作代理的登記尚未一致，請查看主機紀錄。');
+  for(const report of reports)appendWorkerReport(c,report,members.find(a=>a.id===worker.agentId));
+  return{agentId:worker.agentId,terminal:id,reused:true};
+ }
  if(bindings[id])throw Error('此終端已有其他對話綁定。');
- const reports=workerPublicReports(c,id),named=reports.findLast(r=>typeof r.role==='string'&&!['Claude','Codex','MiniMax','Antigravity','代理','系統'].includes(r.role));
- const name=String(named?.role||worker.displayName||terminal.name||worker.name||'工作代理').trim().slice(0,40);
- const agent={id:'worker-'+randomUUID().replaceAll('-','').slice(0,24),name,provider:workerProvider(terminal),level:'worker',brief:'延續原工作與專案背景，直接執行使用者交付的任務，依授權與專案成員協作。'};
+ let agent=identity&&members.find(a=>a.id===identity);
+ if(identity&&!agent)throw Error('這位代理已移動或刪除，不重新登記。');
+ if(actualProvider&&worker.provider&&actualProvider!==worker.provider)throw Error('實際引擎與原啟動紀錄不符，請先核對終端。');
+ if(!actualProvider&&(!agent||worker.provider!==agent.provider))throw Error('尚未核對這位代理的引擎。');
+ if(!agent){
+  const named=reports.findLast(r=>typeof r.role==='string'&&!['Claude','Codex','MiniMax','Antigravity','代理','系統'].includes(r.role));
+  let name=String(named?.role||worker.displayName||terminal.name||worker.name||'工作代理').trim().slice(0,40);
+  if([...members.map(a=>a.name),coordinatorProfile(c).name||'領頭羊'].some(value=>value.normalize('NFKC').toLowerCase()===name.normalize('NFKC').toLowerCase()))name=name.slice(0,Math.max(1,39-id.length))+' '+id;
+  [agent]=validateRoster([{id:'agent-'+randomUUID().replaceAll('-','').slice(0,24),name,provider,level:'worker',brief:'延續原工作與專案背景，依使用者交付的目標、授權與同專案成員協作。'}]);
+ }
  const workerFile=path.join(c.teamDir,'worker-bindings.json'),workers=read(workerFile)||{};
- bindings[id]={agentId:agent.id,provider:agent.provider,chat:c.chat||'legacy',createdAt:Date.now(),legacyOwner:worker.owner,sessionEstablished:true,awaitingReply:false,ownerAwaitingReply:terminal.status?.state==='working'||Date.now()-(worker.sentAt||0)<10000};workers[id]={...worker,agentId:agent.id};
  const snapshot=[bindingsFile,workerFile,path.join(c.teamBase,'roster.json'),path.join(c.teamBase,'coordinator.json')].map(file=>({file,data:fs.existsSync(file)?fs.readFileSync(file):null}));
- try{save(bindingsFile,bindings);save(workerFile,workers);saveRoster(c,[...members,agent]);}catch(error){for(const old of snapshot){if(old.data===null)fs.rmSync(old.file,{force:true});else fs.writeFileSync(old.file,old.data,{mode:0o600});}throw error;}
- // Copy only already-public worker reports; preserve the leader's original history.
+ registrationBackup(c,snapshot.map(s=>s.file));
+ bindings[id]={agentId:agent.id,provider,chat:c.chat||'legacy',createdAt:Date.now(),legacyOwner:worker.owner,sessionEstablished:!!actualProvider,...(worker.minimaxSessionId?{minimaxSessionId:worker.minimaxSessionId}:{}),awaitingReply:false,ownerAwaitingReply:!(worker.capturedAt>=worker.sentAt)&&(terminal.status?.state==='working'||worker.firstMessageSent!==false&&Date.now()-(worker.sentAt||0)<10000)};workers[id]={...worker,agentId:agent.id};
+ try{save(bindingsFile,bindings);save(workerFile,workers);if(!members.some(a=>a.id===agent.id))saveRoster(c,[...members,agent]);}catch(error){for(const old of snapshot){if(old.data===null)fs.rmSync(old.file,{force:true});else fs.writeFileSync(old.file,old.data,{mode:0o600});}throw error;}
  for(const report of reports)appendWorkerReport(c,report,agent);
  return{agentId:agent.id,terminal:id,reused:true};
 }));}
+const registrationsFile=c=>path.join(c.teamDir,'agent-registrations.json');
+export function pendingRegistrations(c){return Object.values(read(registrationsFile(c))||{}).filter(r=>r.status==='pending');}
+function bindRegistrationTerminal(c,intent,terminal){
+ if(terminal.labels?.['team.creation']!==intent.id||terminal.labels?.['team.agent']!==intent.agentId||terminal.labels?.['team.owner']!==intent.owner||terminal.labels?.['team.chat']!==intent.chat||terminal.labels?.['team.project']!==c.cwd||terminal.cwd!==intent.cwd||terminal.parent!==intent.owner)throw Error('無法核對原啟動結果，不會另開代理。');
+ const file=path.join(c.teamDir,'worker-bindings.json'),workers=read(file)||{};
+ workers[terminal.address]??={owner:intent.owner,chat:intent.chat,name:intent.memberName||intent.name,provider:intent.provider,cwd:intent.cwd,agentId:intent.agentId,sentAt:intent.createdAt,firstMessageSent:intent.firstMessageSent};save(file,workers);
+}
+export function recoverWorkerBinding(c){return withState(c,()=>{
+ if(read(path.join(c.teamDir,'worker-bindings.json'))?.[c.terminal])return false;
+ const pending=pendingRegistrations(c);if(!pending.length)return false;
+ const t=c.run('hc',['get',c.terminal]),intent=pending.find(r=>r.id===t.labels?.['team.creation']);if(!intent)return false;
+ bindRegistrationTerminal(c,intent,t);return true;
+});}
+function finishRegistration(c,intent,terminal){return withRosterState(c,()=>withState(c,()=>{
+ bindRegistrationTerminal(c,intent,terminal);
+ const result=adoptWorkerChat(c,terminal),all=read(registrationsFile(c))||{};
+ all[intent.id]={...intent,status:'registered',terminal:terminal.address};save(registrationsFile(c),all);return result;
+}));}
+
+function findRegistrationTerminal(c,intent){
+ if(intent.terminal)return c.run('hc',['get',intent.terminal]);
+ const list=c.run('hc',['ls','--json','--label','team.creation='+intent.id]);
+ const rows=Array.isArray(list)?list:list.terminals;if(!Array.isArray(rows))throw Error('無法取得可核對的終端清單。');
+ if(rows.length>1)throw Error('發現重複啟動結果，請先核對終端。');
+ return rows.length?c.run('hc',['get',rows[0].address||rows[0].id||rows[0].terminal]):null;
+}
+export function launchWorkerMember(c,spec,launch){return withRosterState(c,()=>{
+ const all=read(registrationsFile(c))||{},members=roster(c);
+ if(spec.requestId&&!/^[a-f0-9-]{36}$/.test(spec.requestId))throw Error('建立請求 ID 無效。');
+ const key=spec.requestId||randomUUID(),previous=all[key],requestHash=createHash('sha256').update(JSON.stringify({agentId:spec.agent?.id||null,displayName:spec.displayName??null,brief:spec.brief??null,model:spec.model??null,name:spec.name,task:spec.task,cwd:spec.cwd,provider:spec.provider})).digest('hex');
+ if(previous){
+  if(previous.requestHash!==requestHash)throw Error('同一建立請求不可更換內容。');
+  if(!members.some(a=>a.id===previous.agentId))throw Error('這位代理已移動或刪除，不重新建立。');
+  const terminal=findRegistrationTerminal(c,previous);if(!terminal)throw Error('原啟動結果尚未核對，不會重複開啟。');
+  const result=finishRegistration(c,previous,terminal);return{...previous.result,agentId:result.agentId,registered:true,reused:true};
+ }
+ if(Object.values(all).some(r=>r.status==='pending'&&(r.name===spec.name||spec.agent&&r.agentId===spec.agent.id)))throw Error('原啟動結果尚未核對，不會重複開啟。');
+ let agent=spec.agent&&members.find(a=>a.id===spec.agent.id);
+ if(spec.agent&&(!agent||agent.provider!==spec.provider))throw Error('代理設定已變更，請重新取得名冊。');
+ if(!agent){
+  [agent]=validateRoster([{id:'agent-'+randomUUID().replaceAll('-','').slice(0,24),name:spec.displayName??spec.name,brief:spec.brief??spec.task.slice(0,1000),provider:spec.provider,level:'worker',...(spec.model!==undefined?{model:spec.model}:{})}]);
+  if(members.some(a=>a.name.normalize('NFKC').toLowerCase()===agent.name.normalize('NFKC').toLowerCase()))throw Error('專案已有同名代理，請指定 agentId 使用原成員。');
+  // The same schema and member limit apply to manual and delegated creation.
+  validateMembership(c,[...members,agent],members);
+ }
+ registrationBackup(c,[path.join(c.teamBase,'roster.json'),path.join(c.teamBase,'coordinator.json'),registrationsFile(c)]);
+ const intent={id:key,requestHash,agentId:agent.id,name:spec.name,memberName:agent.name,task:spec.task,cwd:spec.cwd,provider:spec.provider,owner:spec.owner,chat:c.chat||'legacy',createdAt:Date.now(),status:'pending'};
+ all[key]=intent;save(registrationsFile(c),all);if(!spec.agent)saveRoster(c,[...members,agent]);
+ let made;
+ try{made=launch(agent,key);}catch(error){throw Error('代理已登記，但啟動結果待核對；不會重複開啟。'+error.message);}
+ intent.result=made;intent.terminal=made.terminal||made.address;intent.firstMessageSent=made.first_message?.sent;save(registrationsFile(c),all);
+ if(!/^t[a-z0-9]+$/.test(intent.terminal||''))return{...made,agentId:agent.id,registered:false,registrationPending:true};
+ try{const result=finishRegistration(c,intent,c.run('hc',['get',intent.terminal]));return{...made,agentId:result.agentId,registered:true};}
+ catch(error){return{...made,agentId:agent.id,registered:false,registrationPending:true,registrationError:error.message};}
+});}
+export function reconcileWorkerMembers(c){
+ const result={registered:0,pending:0,errors:[]};
+ for(const intent of pendingRegistrations(c))try{
+  const terminal=findRegistrationTerminal(c,intent);if(!terminal){result.pending++;continue;}
+  finishRegistration(c,intent,terminal);result.registered++;
+ }catch(error){result.pending++;result.errors.push(error.message);}
+ const control=read(path.join(c.teamDir,'control.json'))||{},bindings=read(path.join(c.teamDir,'worker-bindings.json'))||{};
+ for(const [id,b]of Object.entries(bindings)){
+  if(![control.terminal,control.previousTerminal].includes(b.owner)||b.chat!==(c.chat||'legacy')||b.agentId||b.retired)continue;
+  try{const terminal=c.run('hc',['get',id]);if(terminal.state!=='live')continue;adoptWorkerChat(c,terminal);result.registered++;}catch(error){result.errors.push(error.message);}
+ }
+ return result;
+}
+
 function appendWorkerReport(c,report,agent){
  const key=createHash('sha256').update(JSON.stringify([report.terminal,report.reportId||[report.time,report.text]])).digest('hex'),file=path.join(c.teamDir,'messages.jsonl');
  if(fs.existsSync(file)&&fs.readFileSync(file,'utf8').split('\n').some(line=>{try{return JSON.parse(line).workerReportKey===key;}catch{return false;}}))return;
@@ -148,11 +238,20 @@ export function reserveWorkerTurn(c,id,terminal){return withState(c,()=>{
  if(binding.awaitingReply||binding.ownerAwaitingReply||pending||!['idle','done'].includes(terminal.status?.state))throw Error('這位代理正在處理或等待直接訊息，請等目前回合結束再派工。');
  binding.ownerAwaitingReply=true;save(file,bindings);
 });}
-export function retryDirect(c,agentId){return withState(c,()=>{
- if(!roster(c).some(a=>a.id===agentId))throw Error('找不到這位專案代理。');const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
+export function retryDirect(c,agentId){return withRosterState(c,()=>withState(c,()=>{
+ if(!roster(c).some(a=>a.id===agentId))throw Error('找不到這位專案代理。');
+ const pending=pendingRegistrations(c).find(r=>r.agentId===agentId);
+ if(pending){
+  let terminal;try{terminal=findRegistrationTerminal(c,pending);}catch(error){if(!missingTerminal(error))throw error;terminal=findRegistrationTerminal(c,{...pending,terminal:null});}
+  if(terminal){const result=finishRegistration(c,pending,terminal);return{...result,registered:true,restarted:false};}
+  // Only this explicit action plus an authoritative empty Core listing clears uncertainty.
+  const all=read(registrationsFile(c));all[pending.id]={...pending,status:'absent'};save(registrationsFile(c),all);return{queued:true,restarted:false};
+ }
+
+ const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
  const previous=Object.entries(bindings).filter(([,b])=>b.agentId===agentId&&!b.retired).at(-1);if(!previous)throw Error('沒有可重新開啟的代理。');
  const actual=directTerminal(c,previous[0]);if(!actual||actual.t.state!=='finished'||previous[1].delivered||previous[1].captureHash)throw Error('代理仍在執行或已完成啟動，請先查看原終端。');previous[1].retryRequested=true;save(file,bindings);return{queued:true,restarted:false};
-});}
+}));}
 export function directReply(c,text,key,model){return withState(c,()=>saveDirectReply(c,text,key,model));}
 function replyActions(text){
  const actions=[...text.matchAll(/<herdr-action>([\s\S]*?)<\/herdr-action>/g)].filter(match=>actionable(text,match));
@@ -336,6 +435,7 @@ function sendDirect(c){
   for(const item of queue){if(seen.has(item.agentId))continue;seen.add(item.agentId);const agent=agents.find(a=>a.id===item.agentId);if(!agent){blocked={sent:0,reason:'agent_removed'};continue;}
   // Discover real sessions; a conversation never requires a coordinator startup.
   const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
+  if(pendingRegistrations(c).some(r=>r.agentId===agent.id)){blocked={sent:0,reason:'registration_pending'};continue;}
   let changingEngine=false;
   for(const [id,b]of Object.entries(bindings)){
    if(!b.legacyOwner||b.retired||b.agentId!==agent.id||b.provider===agent.provider)continue;
@@ -367,7 +467,7 @@ function sendDirect(c){
   const role=canCreateAgent(c,agent.id)
    ?'你是本專案的領頭羊。收到目標後先拆解並判斷分工，使用者文字指定人選時照指派實際送出，未指定時依任務挑選名冊成員。交付目標本身允許你在既有專案成員間完成所需分工。簡單問題與狀態查詢可直接答覆。'
    :'這是使用者直接交給你的任務，你應親自執行，依使用者指示才找同專案其他成員協作。';
-  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${agentPolicyPrompt(c)}${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
+  const prompt=`你是 ${agent.name}。職責：${agent.brief}。只處理授權範圍。${agentPolicyPrompt(c)}${role}${collaborationPrompt(c,agent.id)}${projectMemoryPrompt(c)}${conversationHistoryPrompt(c,agent.id,item.text)}\n${agentCreationPrompt(creation)}\n直接回覆，不執行 report；Claude、Codex、Antigravity、MiniMax 最後回覆由官方 hook 顯示，不需要讀取外部回報工具。受阻就停止，不改權限。\n${t.cwd!==c.cwd?'專案根目錄：'+c.cwd+'；附件及專案相對路徑以此為準。\n':''}本次訊息：${item.text}${agent.provider==='minimax'?'\n工作台回覆綁定：最後答案末尾保留 <herdr-reply-id>'+item.id+'</herdr-reply-id>，工作台會移除此標記，避免多位同引擎代理的回覆混淆。':''}`;
   bindings[id].awaitingReply=true;bindings[id].delivered=false;bindings[id].lastMessageId=item.id;bindings[id].lastSentAt=Date.now();bindings[id].turnAtDelivery=t.turn;save(file,bindings);
   if(item.collaborationId){const jobs=read(path.join(c.teamDir,'collaborations.json'))||{},job=jobs[item.collaborationId];if(!job||job.targetAgent!==agent.id)throw Error('Invalid collaboration binding.');bindings[id].activeJob=job.id;save(file,bindings);job.targetTerminal=id;job.status='working';job.revision++;save(path.join(c.teamDir,'collaborations.json'),jobs);}
 
@@ -376,4 +476,10 @@ function sendDirect(c){
   return blocked||{sent:0};
  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
-export function bindNativeSession(c,sessionId){return withState(c,()=>{const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file);if(!bindings?.[c.terminal])throw Error('Missing direct binding.');bindings[c.terminal].minimaxSessionId=sessionId;save(file,bindings);});}
+export function bindNativeSession(c,sessionId){return withState(c,()=>{
+ const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file);
+ if(bindings?.[c.terminal]){bindings[c.terminal].minimaxSessionId=sessionId;save(file,bindings);return;}
+ const workersFile=path.join(c.teamDir,'worker-bindings.json'),workers=read(workersFile);
+ if(!verifiedLegacyWorker(c,c.terminal,c.run('hc',['get',c.terminal])))throw Error('Missing verified worker binding.');
+ workers[c.terminal].minimaxSessionId=sessionId;save(workersFile,workers);
+});}
