@@ -8,7 +8,7 @@ export function minimaxReply(event,home,run){
  const base=context(root,null,run,null,config),dir=path.join(base.teamBase,'conversations'),chats=fs.existsSync(dir)?fs.readdirSync(dir).filter(id=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)):[],candidates=[],marker=event.last_assistant_message.match(/<herdr-reply-id>([a-f0-9-]{36})<\/herdr-reply-id>/)?.[1];
  const contexts=chats.map(chat=>{const c=context(root,null,run,chat,config);return{c,bindings:read(path.join(c.teamDir,'direct-bindings.json'),{})};}),knownOwners=contexts.flatMap(({c,bindings})=>Object.entries(bindings).filter(([,b])=>b.minimaxSessionId===event.session_id).map(([id])=>c.chat+':'+id));
  for(const {c,bindings}of contexts){for(const [id,binding]of Object.entries(bindings)){
-  if(binding.provider!=='minimax'||(!binding.awaitingReply&&binding.minimaxSessionId!==event.session_id))continue;
+  if(binding.provider!=='minimax'||(!binding.awaitingReply&&!(binding.legacyOwner&&binding.ownerAwaitingReply)&&binding.minimaxSessionId!==event.session_id))continue;
   if(knownOwners.length&&!knownOwners.includes(c.chat+':'+id))continue;
   if(marker&&binding.lastMessageId!==marker)continue;
   try{const actual=directTerminal(c,id);if(!actual||actual.t.status?.app!=='mcode')continue;const result=c.run('hc',['read',id,'--json','--lines','200']),screen=String(result.text||'');if(!screen.trim())continue;if(marker&&!screen.replace(/\s/g,'').includes(marker))continue;if(!marker&&binding.minimaxSessionId!==event.session_id&&!screen.replace(/[\s*_`~]/g,'').includes(event.last_assistant_message.replace(/[\s*_`~]/g,'')))continue;candidates.push({c:{...c,terminal:id},known:binding.minimaxSessionId===event.session_id});}catch{}

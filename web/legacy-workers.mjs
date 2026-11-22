@@ -16,7 +16,7 @@ export function workerCandidates(project,context){
 // A display projection of verified existing Core workers. It cannot create, send to, rename, or promote an agent.
 export function workerView(candidate,terminal,events=[]){
  const {address,binding,scope}=candidate,provider=terminalProvider(terminal);
- if(!provider||terminal.address!==address||terminal.cwd!==scope.cwd||terminal.parent!==binding.owner||terminal.labels?.['team.owner']!==binding.owner||terminal.labels?.['team.chat']!==binding.chat||terminal.labels?.['team.agent']||terminal.state!=='live')return null;
+ if(binding.agentId||!provider||terminal.address!==address||terminal.cwd!==scope.cwd||terminal.parent!==binding.owner||terminal.labels?.['team.owner']!==binding.owner||terminal.labels?.['team.chat']!==binding.chat||terminal.labels?.['team.agent']||terminal.state!=='live')return null;
  const reports=events.filter(e=>e.terminal===address&&e.kind==='worker-report'),report=reports.at(-1),named=reports.findLast(e=>typeof e.role==='string'&&!['Codex','Claude','MiniMax','Antigravity','代理','系統'].includes(e.role));
  const name=named?.role||binding.displayName||terminal.name||binding.name||'工作代理';
  return {terminal:address,name:String(name).slice(0,80),provider,chat:binding.chat,state:terminal.state,status:terminal.status,lastReport:typeof report?.text==='string'?report.text.slice(0,6000):null,reportTime:report?.time||null,temporary:true};

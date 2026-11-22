@@ -1,3 +1,4 @@
+import {verifiedLegacyWorker} from '../worker-chat.mjs';
 import fs from 'node:fs';import path from 'node:path';import {randomUUID,createHash} from 'node:crypto';
 import {withRosterState} from '../direct.mjs';
 import {roster,saveRoster,coordinatorProfile,missingTerminal} from '../team-runtime.mjs';
@@ -27,7 +28,7 @@ async function manageUnlocked({source,target,sourceWorkspace,targetWorkspace,age
   if((read(path.join(c.teamDir,'checklist.json'),{}).items||[]).some(item=>item.status!=='done'&&[agentId,agent.name].includes(item.owner)))throw Error('這位代理仍有未驗收待辦，請先完成工作。');
   for(const dirName of ['direct-queue','chat-queue']){const dir=path.join(c.teamDir,dirName);if(fs.existsSync(dir)&&fs.readdirSync(dir).filter(n=>n.endsWith('.json')).some(n=>{const q=read(path.join(dir,n),{});return q.agentId===agentId||q.target===agentId;}))throw Error('這位代理還有排隊訊息，請先完成工作。');}
   if(Object.values(read(path.join(c.teamDir,'collaborations.json'),{})).some(j=>!['done','failed'].includes(j.status)&&(j.sourceAgent===agentId||j.targetAgent===agentId)))throw Error('這位代理仍有未完成協作，請先驗收或完成工作。');
-  for(const [file,direct]of [['direct-bindings.json',true],['worker-bindings.json',false]])for(const [id,b]of Object.entries(read(path.join(c.teamDir,file),{}))){if(b.retired||(direct&&b.agentId!==agentId))continue;if(direct&&(b.awaitingReply||b.activeJob))throw Error('仍在等待回覆或協作驗收，請完成後再試。');let t;try{t=await core(['get',id]);}catch(e){if(missingTerminal(e))continue;throw Error('無法核對代理終端，暫不變更角色。');}if(!direct&&t.labels?.['team.agent']!==agentId)continue;if(t.cwd!==source.cwd||t.labels?.['team.agent']!==agentId||(direct?(t.parent||t.labels?.['team.direct']!=='true'||t.labels?.['team.chat']!==(c.chat||'legacy')):(t.parent!==b.owner||t.labels?.['team.owner']!==b.owner)))throw Error('代理終端歸屬不符，停止變更。');if(t.state==='live'){if(!['idle','done'].includes(t.status?.state))throw Error('代理仍在執行或等待確認，請先完成工作。');sessions.push(id);}}
+  for(const [file,direct]of [['direct-bindings.json',true],['worker-bindings.json',false]])for(const [id,b]of Object.entries(read(path.join(c.teamDir,file),{}))){if(b.retired||(direct&&b.agentId!==agentId))continue;if(direct&&(b.awaitingReply||b.ownerAwaitingReply||b.activeJob))throw Error('仍在等待回覆或協作驗收，請完成後再試。');let t;try{t=await core(['get',id]);}catch(e){if(missingTerminal(e))continue;throw Error('無法核對代理終端，暫不變更角色。');}if(!direct&&(b.agentId||t.labels?.['team.agent'])!==agentId)continue;if(t.cwd!==source.cwd||((b.legacyOwner||!direct)?b.agentId||t.labels?.['team.agent']:t.labels?.['team.agent'])!==agentId||(direct?(b.legacyOwner?!verifiedLegacyWorker(c,id,t,agentId):(t.parent||t.labels?.['team.direct']!=='true'||t.labels?.['team.chat']!==(c.chat||'legacy'))):(t.parent!==b.owner||t.labels?.['team.owner']!==b.owner)))throw Error('代理終端歸屬不符，停止變更。');if(t.state==='live'){if(!['idle','done'].includes(t.status?.state))throw Error('代理仍在執行或等待確認，請先完成工作。');sessions.push(id);}}
  }
  // Stop only verified idle sessions; never answer a permission prompt or kill work.
  for(const id of [...new Set(sessions)]){await core(['kill',id]);try{const t=await core(['get',id]);if(t.state==='live')throw Error('閒置會話尚未停止，未變更角色。');}catch(e){if(!missingTerminal(e))throw e;}}
@@ -42,7 +43,7 @@ async function manageUnlocked({source,target,sourceWorkspace,targetWorkspace,age
   write(path.join(base(source),'sidebar.json'),{revision:from.revision+1,order:from.order.filter(id=>id!==agentId),pinned:from.pinned.filter(id=>id!==agentId)});
   if(target)write(path.join(base(target),'sidebar.json'),{revision:to.revision+1,order:[...to.order,agentId],pinned:from.pinned.includes(agentId)?[...to.pinned,agentId]:to.pinned});
  }catch(error){for(const s of snapshot){if(s.content===null)fs.rmSync(s.file,{force:true});else{fs.mkdirSync(path.dirname(s.file),{recursive:true});fs.writeFileSync(s.file,s.content,{mode:0o600});}}throw error;}
- return{saved:true,moved:!!target,agentId,stoppedIdleSessions:sessions.length,historyPreserved:true};
+ return{saved:true,moved:!!target,agentId,stoppedIdleSessions:new Set(sessions).size,historyPreserved:true};
  };
  return withRosterState(source,()=>target?withRosterState(target,finish):finish());
 }

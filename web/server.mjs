@@ -1,3 +1,4 @@
+import {verifiedLegacyWorker} from '../worker-chat.mjs';
 import {workerCandidates,createWorkerObserver} from './legacy-workers.mjs';
 import {skillRequests} from '../agent-policy.mjs';
 import {conversationUsage} from './usage.mjs';
@@ -10,7 +11,7 @@ import {artifactReferences,driveArtifactLink,readArtifact} from './artifacts.mjs
 import {messageWithAttachments,uploadAttachment} from './attachments.mjs';
 import {checklist} from '../checklist.mjs';
 import {sidebarState,updateSidebar,rosterRevision,manageAgent,managementActive} from './agent-management.mjs';
-import {enqueueDirect,decideSkillRequest,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
+import {enqueueDirect,adoptWorkerChat,decideSkillRequest,retryDirect,chatTaskControls,actOnChatTask,withRosterState} from '../direct.mjs';
 import {validateDriveRoot,storageStatus,serviceAlive} from '../storage.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -26,7 +27,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const validChat=id=>id==='legacy'||/^[a-z0-9][a-z0-9-]{0,63}$/.test(id);
 const read=(file,fallback=null)=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,file);};
-const release={uiBuild:'20261122-workers48',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
+const release={uiBuild:'20261122-workerchat49',appVersion:read(new URL('../package.json',import.meta.url))?.version??null};
 const projectId=folder=>createHash('sha256').update(folder).digest('hex').slice(0,20);
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 function categoryName(value){
@@ -242,7 +243,7 @@ export function createServer(config) {
       }catch(error){if(missingTerminal(error))coordinatorMissing=!terminals.some(t=>t.address===control.terminal);else coreError='目前無法取得代理終端狀態。';}
     }
     const direct=read(path.join(c.teamDir,'direct-bindings.json'),{});
-    for(const [id,binding]of Object.entries(direct))try{const t=await core(['get',id]);if(binding.chat===chat&&t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===binding.agentId&&t.labels?.['team.chat']===chat)terminals.push(t);}catch{}
+    for(const [id,binding]of Object.entries(direct))try{const t=await core(['get',id]);if(binding.chat===chat&&(binding.legacyOwner?verifiedLegacyWorker(c,id,t,binding.agentId):t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===binding.agentId&&t.labels?.['team.chat']===chat)&&!terminals.some(row=>row.address===id))terminals.push(t);}catch{}
     let appOpen=false;const service=read(path.join(home,'service-status.json'));if(config.headless){appOpen=serviceAlive(home);}else{try{await fs.promises.stat(path.join(home,'herdr-app.sock'));appOpen=true;}catch{}}
     const directQueue=path.join(c.teamDir,'direct-queue'),pendingAgents=fs.existsSync(directQueue)?[...new Set(fs.readdirSync(directQueue).filter(n=>/^[a-f0-9-]+\.json$/.test(n)).map(n=>read(path.join(directQueue,n))?.agentId).filter(Boolean))]:[];
     const owner=terminals.find(t=>t.address===control?.terminal),stoppedAgents=roster(c).filter(a=>{const t=terminals.filter(t=>t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===a.id).at(-1),b=t&&direct[t.address];return t?.state==='finished'&&b&&!b.retired&&!b.retryRequested&&!b.delivered&&!b.captureHash;}).map(a=>a.id);
@@ -257,14 +258,14 @@ export function createServer(config) {
     const workerBindings=read(path.join(c.teamDir,'worker-bindings.json'),{});
     const memberProviders=new Map(members.map(a=>[a.id,a.provider]));
     const terminalViews=await Promise.all(terminals.map(async t=>{
-      const agentId=t.labels?.['team.agent']||null,binding=direct[t.address];
+      const binding=direct[t.address],adopted=!!binding?.legacyOwner&&!!verifiedLegacyWorker(c,t.address,t,binding.agentId),agentId=t.labels?.['team.agent']||(adopted?binding.agentId:null);
       const provider=terminalProvider(t)||binding?.provider||null;
       const observed=(t===owner?ownerModel:confirmedModels[agentId]);
       const args=t.foreground?.argv||t.argv||[],at=args.indexOf('--model');
-      const directTerm=t.labels?.['team.direct']==='true';
+      const directTerm=t.labels?.['team.direct']==='true'||adopted;
       const worker=workerBindings[t.address];
       const own=t===owner&&!t.parent&&!directTerm&&control.role===provider;
-      const directAgent=directTerm&&!t.parent&&binding?.provider===provider;
+      const directAgent=directTerm&&(!t.parent||adopted)&&binding?.provider===provider;
       const scopedWorker=!directTerm&&t.parent&&t.parent===owner?.address&&worker?.owner===t.parent&&worker.chat===chat&&
         t.labels?.['team.owner']===t.parent&&t.labels?.['team.chat']===chat&&memberProviders.get(agentId)===provider;
       const verified=t.state==='live'&&t.cwd===c.cwd&&terminalProvider(t)&&(own||directAgent||scopedWorker);
@@ -310,7 +311,10 @@ export function createServer(config) {
     let watchRoot=c.teamBase;
     while(!fs.existsSync(watchRoot))watchRoot=path.dirname(watchRoot);
     watch(watchRoot,{recursive:true},(_event,name)=>{
-      if(name&&path.resolve(watchRoot,String(name)).startsWith(c.teamBase+path.sep)&&/\.(jsonl?|sent|cancelled|stopped)$/.test(String(name)))changed();
+      if(!name)return;
+      const file=path.resolve(watchRoot,String(name));
+      // A newly created state directory can arrive before its recursive file events.
+      if(file===c.teamBase||c.teamBase.startsWith(file+path.sep)||file.startsWith(c.teamBase+path.sep)&&/\.(jsonl?|sent|cancelled|stopped)$/.test(String(name)))changed();
     });
     watch(path.join(home,'web'),{},(_event,name)=>{if(name&&String(name).endsWith('.json'))changed();});
     watch(home,{},(_event,name)=>{
@@ -406,6 +410,10 @@ export function createServer(config) {
           rememberSelection(project,chat);json(200,{project:projectId(folder),chat});return;
         }
         const {p,chat,c}=selection(data.project,data.chat);
+        if(route==='/api/adopt-worker'){
+          if(!data.project||!data.chat||!/^t[a-z0-9]+$/.test(data.terminal||''))throw failure('請指定工作代理的原專案與對話。');
+          const t=await core(['get',data.terminal]);json(200,adoptWorkerChat(c,t));return;
+        }
         if(route==='/api/skill-decision'){if(!data.project||!data.chat)throw failure('請指定 Skill 請求所在對話。');json(200,decideSkillRequest(c,data));return;}
         if(route==='/api/project-memory'){json(200,saveProjectMemory(c,data));return;}
         if(route==='/api/task-action'){

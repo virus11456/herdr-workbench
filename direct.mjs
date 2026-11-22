@@ -1,3 +1,4 @@
+import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-chat.mjs';
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {randomUUID,createHash} from 'node:crypto';
@@ -103,9 +104,50 @@ export function actOnChatTask(c,{id,action}){
 export function directTerminal(c,id){
  const binding=read(path.join(c.teamDir,'direct-bindings.json'))?.[id];if(!binding||binding.chat!==(c.chat||'legacy')||!/^t[a-z0-9]+$/.test(id||''))return null;
  const t=c.run('hc',['get',id]);
- if(t.cwd!==c.cwd||t.parent||t.labels?.['team.direct']!=='true'||t.labels?.['team.agent']!==binding.agentId||t.labels?.['team.chat']!==binding.chat)throw Error('Foreign direct terminal.');
+ if(binding.legacyOwner){
+  const worker=verifiedLegacyWorker(c,id,t,binding.agentId);if(!worker||worker.owner!==binding.legacyOwner)throw Error('Foreign adopted worker.');
+ }else if(t.cwd!==c.cwd||t.parent||t.labels?.['team.direct']!=='true'||t.labels?.['team.agent']!==binding.agentId||t.labels?.['team.chat']!==binding.chat)throw Error('Foreign direct terminal.');
  return{binding,t};
 }
+export function adoptWorkerChat(c,terminal){return withRosterState(c,()=>withState(c,()=>{
+ const id=terminal.address,worker=verifiedLegacyWorker(c,id,terminal),control=read(path.join(c.teamDir,'control.json'));
+ if(!worker||!['live','finished'].includes(terminal.state)||!workerProvider(terminal)||![control?.terminal,control?.previousTerminal].includes(worker.owner))throw Error('無法核對這位工作代理的專案與派工歸屬。');
+ const members=roster(c),bindingsFile=path.join(c.teamDir,'direct-bindings.json'),bindings=read(bindingsFile)||{};
+ if(worker.agentId){if(!members.some(a=>a.id===worker.agentId)||bindings[id]?.agentId!==worker.agentId||bindings[id].legacyOwner!==worker.owner)throw Error('工作代理的登記尚未一致，請查看主機紀錄。');return{agentId:worker.agentId,terminal:id,reused:true};}
+ if(bindings[id])throw Error('此終端已有其他對話綁定。');
+ const reports=workerPublicReports(c,id),named=reports.findLast(r=>typeof r.role==='string'&&!['Claude','Codex','MiniMax','Antigravity','代理','系統'].includes(r.role));
+ const name=String(named?.role||worker.displayName||terminal.name||worker.name||'工作代理').trim().slice(0,40);
+ const agent={id:'worker-'+randomUUID().replaceAll('-','').slice(0,24),name,provider:workerProvider(terminal),level:'worker',brief:'延續原工作與專案背景，直接執行使用者交付的任務，依授權與專案成員協作。'};
+ const workerFile=path.join(c.teamDir,'worker-bindings.json'),workers=read(workerFile)||{};
+ bindings[id]={agentId:agent.id,provider:agent.provider,chat:c.chat||'legacy',createdAt:Date.now(),legacyOwner:worker.owner,sessionEstablished:true,awaitingReply:false,ownerAwaitingReply:terminal.status?.state==='working'||Date.now()-(worker.sentAt||0)<10000};workers[id]={...worker,agentId:agent.id};
+ const snapshot=[bindingsFile,workerFile,path.join(c.teamBase,'roster.json'),path.join(c.teamBase,'coordinator.json')].map(file=>({file,data:fs.existsSync(file)?fs.readFileSync(file):null}));
+ try{save(bindingsFile,bindings);save(workerFile,workers);saveRoster(c,[...members,agent]);}catch(error){for(const old of snapshot){if(old.data===null)fs.rmSync(old.file,{force:true});else fs.writeFileSync(old.file,old.data,{mode:0o600});}throw error;}
+ // Copy only already-public worker reports; preserve the leader's original history.
+ for(const report of reports)appendWorkerReport(c,report,agent);
+ return{agentId:agent.id,terminal:id,reused:true};
+}));}
+function appendWorkerReport(c,report,agent){
+ const key=createHash('sha256').update(JSON.stringify([report.terminal,report.reportId||[report.time,report.text]])).digest('hex'),file=path.join(c.teamDir,'messages.jsonl');
+ if(fs.existsSync(file)&&fs.readFileSync(file,'utf8').split('\n').some(line=>{try{return JSON.parse(line).workerReportKey===key;}catch{return false;}}))return;
+ fs.appendFileSync(file,JSON.stringify({...report,kind:'reply',direct:true,target:agent.id,agentId:agent.id,role:agent.name,workerReportKey:key})+'\n',{mode:0o600});
+}
+export function mirrorWorkerReport(c,report){return withState(c,()=>{
+ const binding=read(path.join(c.teamDir,'direct-bindings.json'))?.[c.terminal],agent=binding&&roster(c).find(a=>a.id===binding.agentId);
+ if(!binding?.legacyOwner||!agent||binding.awaitingReply)return;
+ if(!verifiedLegacyWorker(c,c.terminal,c.run('hc',['get',c.terminal]),agent.id))return;
+ appendWorkerReport(c,report,agent);
+});}
+export function settleWorkerTurn(c){return withState(c,()=>{
+ const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file),binding=bindings?.[c.terminal];
+ if(binding?.legacyOwner&&!binding.awaitingReply&&binding.ownerAwaitingReply){binding.ownerAwaitingReply=false;save(file,bindings);}
+});}
+export function reserveWorkerTurn(c,id,terminal){return withState(c,()=>{
+ const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file),binding=bindings?.[id];if(!binding?.legacyOwner)return;
+ if(!verifiedLegacyWorker(c,id,terminal,binding.agentId))throw Error('無法核對工作代理綁定。');
+ const dir=path.join(c.teamDir,'direct-queue'),pending=fs.existsSync(dir)&&fs.readdirSync(dir).some(name=>name.endsWith('.json')&&read(path.join(dir,name))?.agentId===binding.agentId);
+ if(binding.awaitingReply||binding.ownerAwaitingReply||pending||!['idle','done'].includes(terminal.status?.state))throw Error('這位代理正在處理或等待直接訊息，請等目前回合結束再派工。');
+ binding.ownerAwaitingReply=true;save(file,bindings);
+});}
 export function retryDirect(c,agentId){return withState(c,()=>{
  if(!roster(c).some(a=>a.id===agentId))throw Error('找不到這位專案代理。');const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
  const previous=Object.entries(bindings).filter(([,b])=>b.agentId===agentId&&!b.retired).at(-1);if(!previous)throw Error('沒有可重新開啟的代理。');
@@ -155,6 +197,7 @@ function saveDirectReply(c,text,key,model){
  const actual=directTerminal(c,c.terminal);if(!actual)return{captured:false};
  if(validMessageId(actual.binding.lastMessageId)&&fs.existsSync(queueFile(c,actual.binding.lastMessageId,true)+'.stopped'))return{captured:false,reason:'stopped_turn'};
  if(typeof text!=='string'||!text.trim())return{captured:false};
+ if(actual.binding.legacyOwner&&!actual.binding.awaitingReply)return actual.binding.ownerAwaitingReply||!actual.binding.lastMessageId?{captured:false}:{captured:false,reason:'not_awaiting_direct_reply'};
  const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file),hash=createHash('sha256').update(key+'\n'+text).digest('hex');
  if(bindings[c.terminal].captureHash===hash)return{captured:false,reason:'duplicate'};
  const agent=roster(c).find(a=>a.id===actual.binding.agentId);if(!agent)return{captured:false};
@@ -293,18 +336,30 @@ function sendDirect(c){
   for(const item of queue){if(seen.has(item.agentId))continue;seen.add(item.agentId);const agent=agents.find(a=>a.id===item.agentId);if(!agent){blocked={sent:0,reason:'agent_removed'};continue;}
   // Discover real sessions; a conversation never requires a coordinator startup.
   const file=path.join(c.teamDir,'direct-bindings.json'),bindings=read(file)||{};
+  let changingEngine=false;
+  for(const [id,b]of Object.entries(bindings)){
+   if(!b.legacyOwner||b.retired||b.agentId!==agent.id||b.provider===agent.provider)continue;
+   let old;try{old=directTerminal(c,id)?.t;}catch(error){if(!missingTerminal(error))throw error;}
+   if(old?.state==='live'){
+    if(b.awaitingReply||b.ownerAwaitingReply||!['idle','done'].includes(old.status?.state)){blocked={sent:0,reason:'waiting_engine_switch',terminal:id};changingEngine=true;break;}
+    c.run('hc',['kill',id]);try{if(c.run('hc',['get',id]).state==='live')throw Error('原工作代理尚未停止，未啟動另一個引擎。');}catch(error){if(!missingTerminal(error))throw error;}
+   }
+   b.retired=true;save(file,bindings);
+  }
+  if(changingEngine)continue;
   let entry=Object.entries(bindings).find(([id,b])=>{if(b.retired||b.agentId!==agent.id)return false;try{const t=directTerminal(c,id)?.t;return t?.state==='live'&&(b.provider||({'claude-code':'claude',claude:'claude',codex:'codex',antigravity:'antigravity',minimax:'minimax',mcode:'minimax'}[t.status?.app])||agent.provider)===agent.provider;}catch{return false;}});
   if(!entry){
    const previous=Object.entries(bindings).filter(([,b])=>b.agentId===agent.id&&(!b.provider||b.provider===agent.provider)&&!b.retired).at(-1);
    if(previous){
     let actual;try{actual=directTerminal(c,previous[0]);}catch(error){if(!missingTerminal(error))throw error;previous[1].retired=true;previous[1].retiredReason='terminal_missing';save(file,bindings);}
-    if(actual?.t.state==='finished'&&!previous[1].delivered&&!previous[1].captureHash){if(!previous[1].retryRequested){blocked={sent:0,reason:'startup_stopped',terminal:previous[0]};continue;}previous[1].retired=true;save(file,bindings);}
+    if(actual?.t.state==='finished'&&!previous[1].delivered&&!previous[1].captureHash&&!previous[1].sessionEstablished){if(!previous[1].retryRequested){blocked={sent:0,reason:'startup_stopped',terminal:previous[0]};continue;}previous[1].retired=true;save(file,bindings);}
    }
    const made=c.run('hc',['run','--bg','--no-parent','--cwd',c.cwd,'--name','direct-'+agent.id.slice(-12)+'-'+(c.chat||'legacy').slice(-6)+'-'+randomUUID().slice(0,4),'--label','team.direct=true','--label','team.chat='+(c.chat||'legacy'),'--label','team.agent='+agent.id,path.join(os.homedir(),'.local/bin','herdr-team-'+agent.provider)]);
    const id=made.address||made.terminal;if(!/^t[a-z0-9]+$/.test(id||''))throw Error('Core did not return a real direct terminal.');
    bindings[id]={agentId:agent.id,provider:agent.provider,chat:c.chat||'legacy',createdAt:Date.now()};save(file,bindings);return{sent:0,started:id};
   }
   const [id]=entry,t=directTerminal(c,id).t;
+  if(bindings[id].ownerAwaitingReply){blocked={sent:0,reason:'waiting_owner_task',terminal:id};continue;}
   if(!['idle','done'].includes(t.status?.state)||!t.status?.app){blocked={sent:0,reason:'agent_not_ready',terminal:id};continue;}
   if(bindings[id].activeJob&&!skillRequests(c).some(r=>r.id===item.id&&r.agentId===agent.id&&['approved','denied'].includes(r.status))){blocked={sent:0,reason:'waiting_collaboration',terminal:id};continue;}
   const lease=read(path.join(c.teamDir,'direct-delivery.json'));if(lease?.terminal===id&&bindings[id].awaitingReply!==false&&Date.now()-lease.time<10000){blocked={sent:0,reason:'delivery_settling'};continue;}

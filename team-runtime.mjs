@@ -2,7 +2,7 @@ import {agentPolicyPrompt,networkPreapproved} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
 import {saveProviderUsage} from './provider-usage.mjs';
 import {checklist,updateChecklist} from './checklist.mjs';
-import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState} from './direct.mjs';
+import {drainDirect,directReply,drainCollaboration,directTerminal,legacyCollaborationReply,agentCreationPrompt,withRosterState,mirrorWorkerReport,settleWorkerTurn,reserveWorkerTurn} from './direct.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -116,7 +116,7 @@ export async function switchAgentModel(c,agentId,model,pause=delay){
   return current.map(a=>a.id===agentId?{...a,model}:a);
  });
  const bindings=read(path.join(teamDir(c),'direct-bindings.json'))||{};let terminal;
- for(const [id,b]of Object.entries(bindings))if(b.agentId===agentId){const t=c.run('hc',['get',id]);if(t.state==='live'&&t.cwd===c.cwd&&!t.parent&&t.labels?.['team.direct']==='true'&&t.labels?.['team.agent']===agentId&&t.labels?.['team.chat']===(c.chat||'legacy'))terminal=t;}
+ for(const [id,b]of Object.entries(bindings))if(b.agentId===agentId&&!b.retired){try{const t=directTerminal(c,id)?.t;if(t?.state==='live')terminal=t;}catch(error){if(!missingTerminal(error))throw error;}}
  if(!terminal){saveModel();return{model,applied:false,message:'已保存，下一次開啟這位代理時使用 '+claudeModels[model]+'。'};}
  if(!['idle','done'].includes(terminal.status?.state)||!['claude','claude-code'].includes(terminal.status?.app))throw Error('代理尚未待命，請先處理登入、信任或目前工作。');
  c.run('hc',['send',terminal.address,`/model ${model}`]);let confirmed=false;
@@ -339,28 +339,36 @@ function titleMetadata(text) {
  try {const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===1&&typeof value.title==='string';}catch{return false;}
 }
 function captureWorkerReply(event,c,role,control,usageSource) {
- if(!['Codex','Antigravity','MiniMax'].includes(role)||event.type!=='agent-turn-complete'||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
+ if(!(['Codex','Antigravity','MiniMax'].includes(role)&&event.type==='agent-turn-complete'||role==='Claude'&&event.hook_event_name==='Stop')||!c.terminal)return{captured:false,reason:'not_active_coordinator'};
  const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{},binding=bindings[c.terminal];
  if(!binding||binding.owner!==control.terminal||binding.chat!==(c.chat||'legacy'))return{captured:false,reason:'unregistered_worker'};
  const worker=c.run('hc',['get',c.terminal]);
  if(worker.parent!==control.terminal||worker.labels?.['team.owner']!==control.terminal||worker.labels?.['team.chat']!==(c.chat||'legacy'))return{captured:false,reason:'foreign_worker'};
- const text=event['last-assistant-message'];if(typeof text!=='string'||!text.trim())return{captured:false};
+ const text=role==='Claude'?event.last_assistant_message:event['last-assistant-message'];if(typeof text!=='string'||!text.trim())return{captured:false};
  if(titleMetadata(text))return{captured:false,reason:'session_title_metadata'};
  const hash=createHash('sha256').update(String(event['turn-id']??worker.turn??'')+'\n'+text).digest('hex');
  if(binding.captureHash===hash)return{captured:false,reason:'duplicate'};
  if(worker.cwd===c.cwd&&['codex','antigravity','mcode','minimax'].includes(worker.status?.app))saveProviderUsage(c,usageProvider[role],event,usageSource);
  let explicit=false;
  try{explicit=fs.readFileSync(path.join(teamDir(c),'messages.jsonl'),'utf8').trim().split('\n').slice(-200).some(line=>{const e=JSON.parse(line);return e.terminal===c.terminal&&e.kind==='worker-report'&&!['codex-notify','antigravity-stop','minimax-stop'].includes(e.via)&&!titleMetadata(e.text)&&Date.parse(e.time)>=binding.sentAt;});}catch{}
+ settleWorkerTurn(c);
  if(explicit){binding.captureHash=hash;save(file,bindings);return{captured:false,reason:'explicit_report_already_sent'};}
  const result=report(c,control.terminal,binding.name||role,text,{via:{Codex:'codex-notify',Antigravity:'antigravity-stop',MiniMax:'minimax-stop'}[role]});binding.captureHash=hash;save(file,bindings);return {captured:true,...result};
 }
 export function report(c, target, role, text, metadata={}) {
   if (!/^t[a-z0-9]+$/.test(target || '')) throw new Error('A local coordinator terminal ID is required.');
+  const activeDirect=read(path.join(teamDir(c),'direct-bindings.json'))?.[c.terminal];
+  if(activeDirect?.legacyOwner===target&&activeDirect.awaitingReply&&activeDirect.delivered){
+    if(!directTerminal(c,c.terminal))throw Error('無法核對直接對話綁定。');
+    log(c,roster(c).find(a=>a.id===activeDirect.agentId)?.name||role,text,'progress',{direct:true,target:activeDirect.agentId,agentId:activeDirect.agentId});
+    return{queued:false,forwardedToCoordinator:false,direct:true};
+  }
   const p = paths(c), dir = path.join(p.dir, 'outbox');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const id = randomUUID();
   save(path.join(dir, `${id}.json`), { id, target, role, text: String(text), from: c.terminal || null });
   log(c, role, text, 'worker-report', {...metadata,reportId:id});
+  try{mirrorWorkerReport(c,{...metadata,reportId:id,terminal:c.terminal,role,text:String(text),time:new Date().toISOString()});}catch{}
   return { queued: true, id };
 }
 export function drain(c) {
@@ -424,6 +432,7 @@ export function executeRequest(c, req) {
       `本對話回報命令：${command}；交接資料在 ${teamDir(c)}/。\n${a.task}`;
     const labels=['--label',`team.chat=${c.chat || 'legacy'}`,'--label',`team.owner=${control.terminal}`,...(agent?['--label',`team.agent=${agent.id}`]:[])];
     if(agent) {
+      for(const [id,binding] of Object.entries(read(path.join(teamDir(c),'direct-bindings.json'))||{})){if(binding.agentId!==agent.id||binding.retired)continue;try{if(directTerminal(c,id)?.t.state==='live')throw new Error('This agent already has a live terminal; inspect or send to it instead of starting a duplicate.');}catch(error){if(!missingTerminal(error))throw error;}}
       const all=c.run('hc',['ls','--json','--label',`team.agent=${agent.id}`,'--label',`team.chat=${c.chat||'legacy'}`]);
       const duplicate=(Array.isArray(all)?all:all.terminals||[]).some(t=>{
         const full=c.run('hc',['get',t.address||t.id||t.terminal]);
@@ -447,6 +456,7 @@ export function executeRequest(c, req) {
   if (req.action === 'wait') return c.run('hc', ['wait', a.terminal, '--timeout', '8']);
   if (req.action === 'send') {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('A message is required.');
+    reserveWorkerTurn(c,a.terminal,terminal);
     const result=c.run('hc', ['send', a.terminal, a.text]);const file=path.join(teamDir(c),'worker-bindings.json'),bindings=read(file)||{};if(bindings[a.terminal]){bindings[a.terminal].sentAt=Date.now();save(file,bindings);}return result;
   }
   return c.run('hc', ['interrupt', a.terminal]);

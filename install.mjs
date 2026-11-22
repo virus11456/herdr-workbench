@@ -54,6 +54,7 @@ try {
     ['checklist.mjs', path.join(app, 'checklist.mjs')],
     ['direct.mjs', path.join(app, 'direct.mjs')],
     ['agent-policy.mjs', path.join(app, 'agent-policy.mjs')],
+    ['worker-chat.mjs', path.join(app, 'worker-chat.mjs')],
     ...['lead', 'backup', 'claude', 'runtime'].map(name => [`bin/herdr-team-${name}`, path.join(bin, `herdr-team-${name}`)]),
     ...['herdr-claude-task', 'herdr-codex-implement', 'herdr-minimax-cn'].map(name => [`templates/${name}.md`, path.join(core, `templates/${name}.md`)])
   ].map(([source, target]) => {
