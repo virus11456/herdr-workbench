@@ -1,11 +1,11 @@
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
-import {attentionItems,taskCards,taskSummary,taskLabels,collaborationUpdates} from './tasks.mjs';
+import {attentionItems,taskCards,taskSummary,taskLabels,collaborationUpdates,isCollaborationReceipt} from './tasks.mjs';
 import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261122-report58';
+const UI_BUILD='20261122-layout59';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -501,6 +501,7 @@ function renderTasks(){
  if(key===checklistSnapshot)return;checklistSnapshot=key;const open=new Set([...$('task-items').querySelectorAll('details[open]')].map(n=>n.dataset.id));$('task-items').replaceChildren();
  const rank={blocked:0,pending:1,review:2,working:3,queued:4,dispatching:5,stopped:6,unconfirmed:7,replied:8,done:9,cancelled:10};
  for(const task of tasks.sort((a,b)=>rank[a.phase]-rank[b.phase])){const row=el('details','progress-card');row.dataset.id=task.id;row.dataset.phase=task.phase;row.open=open.has(task.id);const summary=el('summary'),title=el('span','task-title',task.title.slice(0,140)),badge=el('span','task-badge',taskLabels[task.phase]);summary.append(title,badge);row.append(summary,el('p','task-owner',(task.source?task.source+' → ':'')+task.owner));
+  if(task.title.length>140)row.append(el('p','task-description','任務內容：'+task.title));
   if(task.acceptance)row.append(el('p','','驗收條件：'+task.acceptance));if(task.verification)row.append(el('p','','驗收結果：'+task.verification));if(task.detail)row.append(el('p','',task.detail));
   if(task.phase==='review')row.append(el('p','','代理已回報，等待交付者核對；尚未驗收完成。'));
   for(const artifact of task.artifacts||[]){
@@ -545,8 +546,10 @@ function updateCollaborationNode(row,entry){
  }
  heading.querySelector('strong').textContent=task.source+' → '+task.owner;
  heading.querySelector('.task-badge').textContent=taskLabels[task.phase];
- title.textContent=task.title||'協作任務';detail.textContent=task.detail.length>280?task.detail.slice(0,280)+'…':task.detail;
- const chat=row.querySelector('.collaboration-chat');chat.hidden=!task.agentId||!state.agents.some(a=>a.id===task.agentId);
+ const completed=task.phase==='done';
+ title.textContent=task.title||'協作任務';detail.textContent=task.detail.length>140?task.detail.slice(0,140)+'…':task.detail;
+ title.hidden=detail.hidden=completed;
+ const chat=row.querySelector('.collaboration-chat');chat.hidden=completed||!task.agentId||!state.agents.some(a=>a.id===task.agentId);
  chat.textContent='與 '+task.owner+' 對話';chat.onclick=()=>switchChat(selection.project,task.chat||selection.chat,task.agentId);
  row.querySelector('.collaboration-actions button').onclick=async()=>{if(task.chat&&task.chat!==selection.chat)await switchChat(selection.project,task.chat,selectedAgent);if(!task.chat||task.chat===selection.chat)openTasks('job:'+task.id);};
 }
@@ -556,6 +559,7 @@ function renderCollaborationUpdates(){
  const updates=collaborationUpdates(state,selectedAgent,{expanded:collaborationExpanded}),key=JSON.stringify([selection,selectedAgent,collaborationExpanded,updates]);
  if(key===collaborationSnapshot)return false;collaborationSnapshot=key;
  $('collaboration-progress').hidden=!updates.rows.length;
+ $('collaboration-heading').textContent=updates.active?'協作進度':'最近完成';
  const labels=updates.rows.map(t=>t.owner+' '+taskLabels[t.phase]);
  $('collaboration-summary').textContent=labels.join(' · ');
  $('collaboration-more').hidden=!updates.remaining&&!collaborationExpanded;
@@ -623,7 +627,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v58`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v59`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -641,7 +645,7 @@ function render(){
  const all=state.messages||[],deliveries={};for(const e of all)if(e.kind==='delivery')deliveries[e.messageId]=e.delivery;
  const timeline=state.timeline?.agent===(selectedAgent||legacyAgent)?state.timeline:null;
  const visible=timeline?mergeTimeline(olderMessages,timeline.messages):all.filter(m=>agent?m.direct&&(m.target||m.agentId)===agent.id:!m.direct);
- const messages=visible.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment'));
+ const messages=visible.filter(m=>m.kind!=='delivery'&&(details||m.kind!=='assignment'&&!isCollaborationReceipt(state,m)));
  $('earlier-messages').hidden=!(olderMessages.length?historyBefore:timeline?.before);
  $('welcome').hidden=messages.length>0;
  $('welcome-description').textContent=agent?agent.brief:'先和協調總控聊聊目標，其他夥伴需要時再加入。';

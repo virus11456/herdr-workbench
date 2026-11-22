@@ -33,6 +33,15 @@ export function taskCards(state,agentId=null){
 }
 export function taskSummary(cards){const count=p=>cards.filter(c=>p.includes(c.phase)).length;return{active:count(['queued','dispatching','working']),attention:count(['pending','blocked']),review:count(['review']),verified:count(['done']),replied:count(['replied']),unconfirmed:count(['unconfirmed'])};}
 
+// The final answer and task details already contain this generated receipt.
+// Keep unknown/custom progress and real replies visible; retain all raw events.
+export function isCollaborationReceipt(state,message){
+ if(message.kind!=='progress'||!message.collaborationId)return false;
+ const chat=message.sourceChat||state.chat||'legacy';
+ const job=(state.projectCollaborations||state.collaborations||[]).find(j=>j.id===message.collaborationId&&(j.sourceChat||state.chat||'legacy')===chat);
+ return job?.status==='done'&&typeof job.verification==='string'&&message.text==='協作已驗收：'+job.verification;
+}
+
 // Compact chat updates come from durable jobs, never from claims in model text.
 export function collaborationUpdates(state,agentId=null,{expanded=false}={}){
  const members=state.agents||[],name=id=>members.find(a=>a.id===id)?.name||(id?'已移除的代理':state.coordinatorName||'領頭羊');
