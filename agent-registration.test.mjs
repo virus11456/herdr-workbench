@@ -187,3 +187,19 @@ test('CLI done with a real-shaped background command refuses retirement until th
  fs.writeFileSync(path.join(f.c.teamBase,'process-baselines.json'),JSON.stringify({tmodern:{verifiedIdle:true,tree}}));f.c.processTree=pid=>pid===5678?{...tree,children:active?[service,work]:[service]}:{root:{pid},children:[]};
  assert.equal(f.terminals.get('tmodern').status.state,'done');assert.throws(()=>executeRequest(f.c,f.request),/原生背景工作/);assert(fs.readFileSync(f.file).equals(f.before));active=false;const result=executeRequest(f.c,{...f.request,id:randomUUID()});assert(result.bindingRepair);assert.equal(f.terminals.get('tmodern').pid,5678);
 });
+
+function automaticInfrastructureFixture(t){
+ const f=duplicateBindings(t),tree={root:{pid:5678,started:'stable-root'},children:[{pid:7001,parent:5678,started:'helper-start',command:'known-host'}]};f.c.processTree=pid=>pid===5678?structuredClone(tree):{root:{pid},children:[]};f.c.processInfrastructure=()=>({kind:'verified-native-helper'});return{...f,tree,baselineFile:path.join(f.c.teamBase,'process-baselines.json')};
+}
+test('known infrastructure is enrolled only with the complete idle repair transaction and a backup',t=>{
+ const f=automaticInfrastructureFixture(t),result=executeRequest(f.c,f.request);assert(result.bindingRepair);assert.deepEqual(result.bindingRepair.baselineUpdated,['tmodern']);const baseline=read(f.baselineFile).tmodern;assert.equal(baseline.source,'automatic-known-infrastructure-after-project-idle-verification');assert.deepEqual(baseline.tree,f.tree);const dir=path.join(f.c.teamBase,'binding-repairs'),folder=path.join(dir,fs.readdirSync(dir)[0]);assert.equal(read(path.join(folder,'before.json')).files.find(x=>x.file===f.baselineFile).content,null);assert.equal(read(path.join(folder,'repair.json')).state,'complete');assert.equal(f.terminals.get('tmodern').pid,5678);
+});
+for(const kind of ['working','awaiting-reply','queued','unreviewed-job','unknown-helper'])test('automatic infrastructure baseline stays untouched for '+kind,t=>{
+ const f=automaticInfrastructureFixture(t);if(kind==='working')f.terminals.get('tmodern').status.state='working';if(kind==='awaiting-reply'){const b=read(f.file);b.tmodern.awaitingReply=true;fs.writeFileSync(f.file,JSON.stringify(b));}if(kind==='queued'){const dir=path.join(f.c.teamDir,'direct-queue');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,randomUUID()+'.json'),'{}');}if(kind==='unreviewed-job')fs.writeFileSync(path.join(f.c.teamDir,'collaborations.json'),JSON.stringify({other:{status:'awaiting_review'}}));if(kind==='unknown-helper')f.c.processInfrastructure=()=>null;const before=fs.readFileSync(f.file);assert.throws(()=>executeRequest(f.c,f.request));assert(!fs.existsSync(f.baselineFile));assert(fs.readFileSync(f.file).equals(before));
+});
+test('a task arriving during automatic infrastructure inspection prevents baseline writes',t=>{
+ const f=automaticInfrastructureFixture(t);f.c.processInfrastructure=()=>{const dir=path.join(f.c.teamDir,'direct-queue');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'new-work.json'),'{}');return{kind:'verified-native-helper'};};assert.throws(()=>executeRequest(f.c,f.request));assert(!fs.existsSync(f.baselineFile));assert(fs.readFileSync(f.file).equals(f.before));
+});
+test('automatic baseline and binding retirement both roll back if the process changes after commit',t=>{
+ const f=automaticInfrastructureFixture(t),run=f.c.run;f.c.run=(cmd,args)=>{const r=run(cmd,args);if(args[0]==='get'&&args[1]==='tmodern'&&fs.existsSync(f.baselineFile))r.pid=99999;return r;};assert.throws(()=>executeRequest(f.c,f.request),/保存後/);assert(!fs.existsSync(f.baselineFile));assert.deepEqual(read(f.file),JSON.parse(f.before));const dir=path.join(f.c.teamBase,'binding-repairs');assert.equal(read(path.join(dir,fs.readdirSync(dir)[0],'repair.json')).state,'aborted');
+});

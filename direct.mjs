@@ -1,5 +1,5 @@
 import {processLock} from './process-lock.mjs';
-import {idleProcessTree,inspectTerminalProcesses} from './process-tree.mjs';
+import {idleProcessTree,inspectTerminalProcesses,automaticIdleBaseline} from './process-tree.mjs';
 import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-chat.mjs';
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
@@ -334,7 +334,7 @@ function repairIdleBindings(c,agentId,requestId){
  if(!release)stop('另一筆訊息正在交付，保留原綁定。');
  try{
   const snapshot=()=>{
-   const files=new Map(),terminals=new Map(),matches=[],scopes=bindingScopes(c);
+   const files=new Map(),terminals=new Map(),matches=[],baselineUpdates={},scopes=bindingScopes(c);
    const load=(file,allowArray=false)=>{
     if(fs.realpathSync(path.dirname(file))!==path.resolve(path.dirname(file)))stop('資料目錄無法核對。');
     let fd;try{
@@ -346,7 +346,7 @@ function repairIdleBindings(c,agentId,requestId){
     }catch(error){if(error.code==='ENOENT'){files.set(file,{file,content:null});return{};}throw error;}finally{if(fd!==undefined)fs.closeSync(fd);}
    };
    const baselines=load(path.join(c.teamBase,'process-baselines.json'));
-   const processes=t=>{if(t.address===c.terminal)return null;const tree=inspectTerminalProcesses(c,t);if(!idleProcessTree(tree,baselines[t.address])){save(path.join(c.teamBase,'binding-repair-last-check.json'),{at:new Date().toISOString(),reason:'native_process_tree_not_idle',terminal:t.address,observed:tree,baseline:baselines[t.address]||null});stop('原生背景工作仍在執行，或常駐工具基線尚未核對。');}return tree;};
+   const processes=t=>{if(t.address===c.terminal)return null;const tree=inspectTerminalProcesses(c,t);if(!idleProcessTree(tree,baselines[t.address])){const proposal=automaticIdleBaseline(c,t,tree,baselines[t.address]);if(proposal){baselineUpdates[t.address]=proposal;return tree;}save(path.join(c.teamBase,'binding-repair-last-check.json'),{at:new Date().toISOString(),reason:'native_process_tree_not_idle',terminal:t.address,observed:tree,baseline:baselines[t.address]||null});stop('原生背景工作仍在執行，或常駐工具基線尚未核對。');}return tree;};
    const inspect=(scope,id)=>{
     let actual;try{actual=directTerminal(scope,id);}catch(error){if(missingTerminal(error))return null;throw error;}
     if(!actual)stop('無法核對原終端身分。');
@@ -409,18 +409,24 @@ function repairIdleBindings(c,agentId,requestId){
    }
    const modern=matches.filter(m=>!m.binding.legacyOwner);
    if(matches.length<2||modern.length!==1||matches.some(m=>m!==modern[0]&&!m.binding.legacyOwner))stop('無法唯一判定應保留的原會話。');
-   return{files:[...files.values()],terminals:[...terminals.values()],scopes:scopes.map(s=>s.teamDir),keep:modern[0],retire:matches.filter(m=>m!==modern[0])};
+   return{files:[...files.values()],terminals:[...terminals.values()],baselineUpdates,scopes:scopes.map(s=>s.teamDir),keep:modern[0],retire:matches.filter(m=>m!==modern[0])};
   };
-  const first=snapshot(),second=snapshot();
-  const signature=s=>JSON.stringify({files:s.files,terminals:s.terminals,scopes:s.scopes});
+  const first=snapshot();if(Object.keys(first.baselineUpdates).length)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500);const second=snapshot();
+  const signature=s=>JSON.stringify({files:s.files,terminals:s.terminals,scopes:s.scopes,baselineUpdates:s.baselineUpdates});
   if(signature(first)!==signature(second))stop('核對期間資料或程序已變更。');
   const id=randomUUID(),folder=path.join(c.teamBase,'binding-repairs',new Date().toISOString().replaceAll(':','-')+'-'+id);
   fs.mkdirSync(folder,{recursive:true,mode:0o700});
   save(path.join(folder,'before.json'),{id,agentId,keep:second.keep.id,retired:second.retire.map(m=>m.id),files:second.files,terminals:second.terminals});
-  const audit={id,agentId,keep:second.keep.id,retired:second.retire.map(m=>m.id),state:'prepared',createdAt:new Date().toISOString()};save(path.join(folder,'repair.json'),audit);
-  const third=snapshot();if(signature(second)!==signature(third))stop('備份後資料或程序已變更。');
+  const audit={id,agentId,baselineTerminals:Object.keys(second.baselineUpdates),keep:second.keep.id,retired:second.retire.map(m=>m.id),state:'prepared',createdAt:new Date().toISOString()};save(path.join(folder,'repair.json'),audit);
+  if(Object.keys(second.baselineUpdates).length)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500);const third=snapshot();if(signature(second)!==signature(third))stop('備份後資料或程序已變更。');
   const changed=[];
   try{
+   if(Object.keys(third.baselineUpdates).length){
+    const file=path.join(c.teamBase,'process-baselines.json'),before=third.files.find(f=>f.file===file),all=before.content===null?{}:JSON.parse(before.content);
+    if(before.content===null?fs.existsSync(file):fs.readFileSync(file,'utf8')!==before.content||fs.lstatSync(file).ino!==before.ino)stop('保存前工具閒置紀錄已變更。');
+    for(const [terminal,proposal]of Object.entries(third.baselineUpdates))all[terminal]={verifiedIdle:true,source:'automatic-known-infrastructure-after-project-idle-verification',verifiedAt:audit.createdAt,repairId:id,...proposal};
+    save(file,all);changed.push({before,after:fs.readFileSync(file,'utf8')});
+   }
    for(const file of [...new Set(third.retire.map(m=>path.join(m.scope.teamDir,'direct-bindings.json'))) ]){
     const before=third.files.find(f=>f.file===file),all=JSON.parse(before.content);
     for(const m of third.retire.filter(m=>path.join(m.scope.teamDir,'direct-bindings.json')===file))all[m.id]={...all[m.id],retired:true,retiredReason:'idle_duplicate_binding_auto_repaired',supersededBy:third.keep.id,retiredAt:audit.createdAt,repairId:id};
@@ -430,11 +436,11 @@ function repairIdleBindings(c,agentId,requestId){
    for(const t of third.terminals){const now=c.run('hc',['get',t.id]);if(now.pid!==t.pid||(now.turn??null)!==t.turn||now.status?.app!==t.app||now.cwd!==t.cwd||(now.parent??null)!==t.parent||JSON.stringify(now.labels)!==JSON.stringify(t.labels)||(t.id===c.terminal?now.status?.state!==t.state:!['idle','done'].includes(now.status?.state)))stop('保存後程序已開始其他工作。');if(t.processes&&!idleProcessTree(inspectTerminalProcesses(c,now),{verifiedIdle:true,tree:t.processes}))stop('保存後出現原生背景工作。');}
    save(path.join(folder,'repair.json'),{...audit,state:'complete'});
   }catch(error){
-   for(const {before,after}of changed.reverse())if(fs.readFileSync(before.file,'utf8')===after)save(before.file,JSON.parse(before.content));
+   for(const {before,after}of changed.reverse())if(fs.readFileSync(before.file,'utf8')===after){if(before.content===null)fs.unlinkSync(before.file);else save(before.file,JSON.parse(before.content));}
    save(path.join(folder,'repair.json'),{...audit,state:'aborted'});throw error;
   }
   log(c,'系統','已確認沒有待派或未完成工作，自動修復舊測試綁定；原代理、程序與對話均保留。','progress');
-  return{...third.keep.scope,bindingRepair:{id,keptTerminal:third.keep.id,retiredCount:third.retire.length}};
+  return{...third.keep.scope,bindingRepair:{id,keptTerminal:third.keep.id,retiredCount:third.retire.length,baselineUpdated:Object.keys(third.baselineUpdates)}};
  }finally{release();}
 }
 function existingAgentScope(c,agentId,requestId){
