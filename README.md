@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v62**（介面版本 `20261123-idle62`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v62.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v62.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v63**（介面版本 `20261124-client63`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v63.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v63.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v63 補上安全的頁面版本更新、不完整回應處理及訊息回執恢復。新版只在草稿成功保存、沒有附件／編輯表單／待確認送出或閱讀歷史時自動更新，不強制刷新舊視窗。GET最多重試一次，POST不自動重送；若後續狀態證明原訊息已入列，會依同一訊息ID與收件代理解除不確定提示，保留新編輯的內容。256項隔離與HTTP整合測試通過，正式入口已核對為v63。[實測範圍](VALIDATION.md#0811-dev--v63)、[舊視窗更新步驟](docs/USAGE.md#舊視窗與連線回復)。
 
 v62 在舊綁定修復時，自動核對已知官方常駐工具的閒置紀錄，不再需要人工補登記目前支援的Claude原廠防休眠工具、Codex stdio工具主機與MiniMax程序監護器。必須整個專案沒有待派、待回覆、未完成或未驗收工作，並通過三次穩定快照、備份與保存後核對；工作中不更新，未知工具仍保留原狀。Claude、Codex、MiniMax真實忙碌保護及閒置派工驗收通過，Codex／MiniMax的工具紀錄確由程式自動更新。234項隔離測試、26項桌面流程通過。[自動核對範圍](VALIDATION.md#0811-dev--v62)。
 

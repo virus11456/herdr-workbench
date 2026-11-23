@@ -1,6 +1,7 @@
-const CACHE='herdr-shell-v62';
+const CACHE='herdr-shell-v63';
+const BUILD='20261124-client63';
 const base=new URL('./',self.location.href);
-const shell=['./','./style.css','./app.js','./format.mjs','./viewport.mjs','./activity.mjs','./message-list.mjs','./tasks.mjs','./style.css?v=20261123-idle62','./app.js?v=20261123-idle62','./sheep.svg','./shepherd.svg','./app-icon.svg','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./manifest.webmanifest'];
+const shell=['./','./client.mjs','./style.css','./app.js','./format.mjs','./viewport.mjs','./activity.mjs','./message-list.mjs','./tasks.mjs','./style.css?v=20261124-client63','./app.js?v=20261124-client63','./sheep.svg','./shepherd.svg','./app-icon.svg','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./manifest.webmanifest'];
 const allowed=new Set(shell.map(p=>new URL(p,base).href));
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);await cache.addAll(shell.map(p=>new Request(new URL(p,base),{cache:'reload'})));await self.skipWaiting();
@@ -8,6 +9,7 @@ self.addEventListener('install',event=>event.waitUntil((async()=>{
 self.addEventListener('activate',event=>event.waitUntil((async()=>{
  for(const name of await caches.keys())if(name.startsWith('herdr-shell-')&&name!==CACHE)await caches.delete(name);
  await self.clients.claim();
+ for(const client of await self.clients.matchAll({type:'window',includeUncontrolled:true})){const url=new URL(client.url);if(url.origin===base.origin&&url.pathname===base.pathname)client.postMessage({type:'HERDR_SHELL_READY',build:BUILD});}
 })()));
 self.addEventListener('fetch',event=>{
  const request=event.request,url=new URL(request.url);

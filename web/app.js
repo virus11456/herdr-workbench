@@ -1,3 +1,4 @@
+import {requestJSON,createClientUpgrade,confirmedSend,settledDraft} from './client.mjs';
 import {bindViewport,layoutDiagnostics} from './viewport.mjs';
 import {formatMessage} from './format.mjs';
 import {attentionItems,taskCards,taskSummary,taskLabels,collaborationUpdates,isCollaborationReceipt} from './tasks.mjs';
@@ -5,7 +6,7 @@ import {createMessageList} from './message-list.mjs';
 import {agentConnected,agentActivity,replyProgress,messageReceipt} from './activity.mjs';
 'use strict';
 const $=id=>document.getElementById(id);
-const UI_BUILD='20261123-idle62';
+const UI_BUILD='20261124-client63';
 const legacyAgent='__coordinator__';
 const providers={claude:'Claude',codex:'Codex',minimax:'MiniMax',antigravity:'Google / Antigravity'};
 const providerName=value=>providers[value]||value||'代理';
@@ -115,7 +116,7 @@ function renderReplyProgress(){
 }
 setInterval(()=>{if(!document.hidden&&state)renderReplyProgress();},1000);
 const draftKey=(chat=selection.chat)=>`herdr-draft:${selection.project}:${chat}:${selectedAgent||'team'}`;
-const attachmentsByDraft=new Map(),attachmentRetries=new Set();
+const attachmentsByDraft=new Map(),attachmentRetries=new Set(),uncertainSends=new Map();
 const attachmentUploads=new WeakMap(),previewUrls=new Map();
 function releaseAttachment(file){const url=previewUrls.get(file);if(url)URL.revokeObjectURL(url);previewUrls.delete(file);attachmentUploads.delete(file);}
 const currentAttachments=()=>attachmentsByDraft.get(draftKey())||[];
@@ -258,22 +259,39 @@ function renderReceiptNotice(){
  $('notice').textContent=receipt==='replied'?'':receipt==='cancelled'?'這則訊息已取消。':receipt==='stopped'?'這則訊息已停止。':receipt==='sent'?'訊息已送達。':`訊息已排隊，等待 ${tracked.name} 接收。`;
  if(['replied','cancelled','stopped'].includes(receipt))pendingReceiptNotice=null;
 }
-async function api(route,data,scope=selection){
- for(let attempt=0;attempt<(data?1:2);attempt++){
-  try{
-   const response=await fetch('./api/'+route,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Herdr-CSRF':state?.csrfToken}:{},body:data?JSON.stringify({...scope,...data}):undefined});
-   const text=await response.text();let result;
-   try{result=JSON.parse(text);if(!result||typeof result!=='object')throw Error();}
-   catch{throw Object.assign(Error(data?'主機回應不完整，操作結果尚未確認。請先檢查目前狀態後再重試。':'主機回應不完整，正在重新連線。'),{transient:true});}
-   if(!response.ok)throw Error(result.error||'連線失敗');return result;
-  }catch(error){
-   const transient=error.transient||error instanceof TypeError;
-   if(!data&&!attempt&&transient){await new Promise(resolve=>setTimeout(resolve,200));continue;}
-   if(error instanceof TypeError)throw Error('連線暫時中斷，請確認主機與 Tailscale。');
-   throw error;
-  }
+const clientUpgrade=createClientUpgrade({build:UI_BUILD,
+ status:()=>({ready:!!state,hidden:document.hidden,offline:navigator.onLine===false,posting,navigating,
+  attachments:[...attachmentsByDraft.values()].some(files=>files.length),dialog:!!document.querySelector('dialog[open]'),
+  pending:hasPendingSend(),editing:!!document.activeElement?.matches('input,textarea')&&!!document.activeElement.value,
+  readingHistory:$('feed').scrollTop+$('feed').clientHeight<$('feed').scrollHeight-120}),
+ saveDraft:()=>{try{const text=$('draft').value;localStorage.setItem(draftKey(),text);return localStorage.getItem(draftKey())===text;}catch{return false;}},
+ storage:{getItem:key=>sessionStorage.getItem(key),setItem:(key,value)=>sessionStorage.setItem(key,value)},
+ reload:()=>location.reload()
+});
+function hasPendingSend(){try{return !!localStorage.getItem(draftKey()+':pending');}catch{return true;}}
+function reconcileUncertainSends(){
+ for(const [id,sent]of uncertainSends){
+  const receipt=confirmedSend({...sent.scope,id,agentId:sent.agentId},state);if(!receipt)continue;
+  uncertainSends.delete(id);
+  let saved,currentText;
+  const current=draftKey()===sent.key;
+  try{saved=JSON.parse(localStorage.getItem(sent.key+':pending')||'null');currentText=current?$('draft').value:localStorage.getItem(sent.key);}catch{continue;}
+  const settled=settledDraft({pendingId:saved?.id,messageId:id,currentText,sentText:sent.text,currentFiles:attachmentsByDraft.get(sent.key)||[],sentFiles:sent.files});
+  if(saved?.id!==id)continue;
+  try{localStorage.removeItem(sent.key+':pending');}catch{}
+  if(settled.files.length)attachmentsByDraft.set(sent.key,settled.files);else attachmentsByDraft.delete(sent.key);
+  attachmentRetries.delete(sent.key);
+  for(const file of sent.files)if(![...attachmentsByDraft.values()].some(files=>files.includes(file)))releaseAttachment(file);
+  if(settled.clearText){try{if(localStorage.getItem(sent.key)===sent.text)localStorage.removeItem(sent.key);}catch{}if(current)$('draft').value='';}
+  if(current){notice(receipt==='replied'?'':receipt==='cancelled'?'這則訊息已取消。':receipt==='stopped'?'這則訊息已停止。':'已確認訊息入列，不會重複送出。');pendingReceiptNotice={...sent.scope,agentId:sent.agentId,messageId:id,name:sent.name,sent:receipt==='sent'};}
+
  }
 }
+
+async function api(route,data,scope=selection){
+ return requestJSON(route,{data,scope,csrfToken:state?.csrfToken,onBuild:build=>clientUpgrade.observe(build)});
+}
+
 let stateConnectionError=false;
 async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
  const switching=scope!==selection,n=++revision,q=new URLSearchParams();
@@ -312,9 +330,12 @@ async function refresh(scope=selection,agent=selectedAgent,recordHistory=false){
   if(recordHistory&&link.href!==location.href)history.pushState(null,'',link);
   else history.replaceState(null,'',link);
   if(stateConnectionError){stateConnectionError=false;if(!pendingReceiptNotice)$('notice').textContent='';}
+  reconcileUncertainSends();
   render();
   connectUpdates();
+  clientUpgrade.observe(result.uiBuild);
   if(first){restoreDraft();$('feed').scrollTop=$('feed').scrollHeight;}
+  clientUpgrade.attempt();
   return true;
  }catch(e){if(n===revision){stateConnectionError=true;$('notice').textContent='暫時無法更新，保留目前對話並自動重新連線。';$('status').textContent='連線暫時中斷，正在重新連線';if(!state)$('members').replaceChildren(el('p','project-summary','暫時無法載入專案；請恢復主機連線，不必重建代理。'));}}
 }
@@ -627,7 +648,7 @@ function createMessageNode(entry){
 const reconcileMessages=createMessageList($('messages'),{create:createMessageNode,update:updateMessageNode});
 function render(){
  if($('team-dialog').open&&$('conversation-usage-section').open)renderUsage();
- $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v62`:'版本待確認';
+ $('workbench-version').textContent=state.appVersion?`版本 ${state.appVersion} · v63`:'版本待確認';
  renderNav();const agent=currentAgent();renderSkillRequests(agent);const live=agent?terminalFor(agent):state.terminals.find(t=>t.address===state.control?.terminal);
  $('title').textContent=agent?.name||state.coordinatorName||'領頭羊';
  $('draft').placeholder=agent?`告訴 ${agent.name}，你想完成什麼…`:'告訴總控，你想完成什麼…';
@@ -737,6 +758,7 @@ $('composer').onsubmit=async e=>{
   const attachments=files.length?await uploadFiles(scope,pending.id,files,csrf):undefined;
   const delivered=await api('message',{text,id:pending.id,attachments,
    allowAgentCreation:pending.allowAgentCreation,...(agent?{agentId:agent.id}:{})},scope);
+  uncertainSends.delete(pending.id);
   try{localStorage.removeItem(pendingKey);localStorage.removeItem(key);}catch{}
   attachmentsByDraft.delete(key);attachmentRetries.delete(key);for(const file of files)releaseAttachment(file);
   if(draftKey()===key){
@@ -748,8 +770,8 @@ $('composer').onsubmit=async e=>{
    pendingReceiptNotice={...scope,agentId:selectedAgent||null,messageId:pending.id,name:to,sent:delivered.status==='sent'};
   }
   await refresh();
- }catch(error){if(files.length)attachmentRetries.add(key);notice(error.message);}
- finally{posting=false;updateSend();renderReplyProgress();scheduleRefresh();}
+ }catch(error){if(files.length)attachmentRetries.add(key);if(error.uncertain)uncertainSends.set(pending.id,{key,scope,text,files:[...files],agentId:agent?.id||null,name:agent?.name||state.coordinatorName||'領頭羊'});notice(error.message);}
+ finally{posting=false;updateSend();renderReplyProgress();scheduleRefresh();clientUpgrade.attempt();}
 };
 $('search').oninput=renderNav;
 $('sidebar-toggle').onclick=()=>{if(matchMedia('(max-width:760px)').matches)document.body.classList.toggle('show-sidebar');else document.body.classList.toggle('hide-sidebar');};
@@ -974,7 +996,10 @@ document.documentElement.dataset.layoutBuild=UI_BUILD;
 
 // Install only the app shell. Conversations, credentials and task requests stay online.
 if('serviceWorker' in navigator && location.protocol==='https:') {
- navigator.serviceWorker.register('./sw.js',{scope:'./',updateViaCache:'none'}).catch(()=>notice('暫時無法啟用主畫面 App；你仍可使用網頁。'));
+ navigator.serviceWorker.addEventListener('message',event=>{
+  try{const source=new URL(event.source?.scriptURL),expected=new URL('./sw.js',location.href);if(source.origin!==expected.origin||source.pathname!==expected.pathname||event.data?.type!=='HERDR_SHELL_READY')return;clientUpgrade.observe(event.data.build);clientUpgrade.attempt();}catch{}
+ });
+ navigator.serviceWorker.register('./sw.js',{scope:'./',updateViaCache:'none'}).then(reg=>reg.update().catch(()=>{})).catch(()=>notice('暫時無法啟用主畫面 App；你仍可使用網頁。'));
 }
 
 fitDraft();
