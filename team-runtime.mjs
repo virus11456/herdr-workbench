@@ -185,7 +185,7 @@ export function context(cwd = process.env.HERDR_TEAM_PROJECT_ROOT || process.cwd
   const memoryDir=options.appHome?path.join(options.appHome,'project-memory',projectKey):teamBase;
   const usageDir=stateBase&&path.join(stateBase,...conversation);
   return {cwd:root,appHome:options.appHome,chat,headless:!!options.headless,privateState:teamBase===stateBase,teamBase,teamDir:path.join(teamBase,...conversation),memoryDir,usageDir,terminal,
-    run:run||((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})))};
+    run:run||Object.assign((cmd,args)=>JSON.parse(execFileSync(path.join(os.homedir(),'.local/bin',cmd),args,{cwd:root,encoding:'utf8',timeout:75000,maxBuffer:1024*1024})),{nativeProcessInspection:true})};
 }
 function coreLaunch(c,argv) {
  const made=c.run('hc',['run','--bg','--no-parent','--keep','--cwd',c.cwd,...argv]);

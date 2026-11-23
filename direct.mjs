@@ -1,4 +1,5 @@
 import {processLock} from './process-lock.mjs';
+import {idleProcessTree,inspectTerminalProcesses} from './process-tree.mjs';
 import {verifiedLegacyWorker,workerProvider,workerPublicReports} from './worker-chat.mjs';
 import {agentPolicyPrompt,requestSkill,decideSkill,skillRequests,reviewNewRole} from './agent-policy.mjs';
 import {projectMemoryPrompt,conversationHistoryPrompt} from './project-memory.mjs';
@@ -344,13 +345,15 @@ function repairIdleBindings(c,agentId,requestId){
      files.set(file,{file,content,ino:s.ino,dev:s.dev,mode:s.mode&0o777,sha256:createHash('sha256').update(content).digest('hex')});return data;
     }catch(error){if(error.code==='ENOENT'){files.set(file,{file,content:null});return{};}throw error;}finally{if(fd!==undefined)fs.closeSync(fd);}
    };
+   const baselines=load(path.join(c.teamBase,'process-baselines.json'));
+   const processes=t=>{if(t.address===c.terminal)return null;const tree=inspectTerminalProcesses(c,t);if(!idleProcessTree(tree,baselines[t.address])){save(path.join(c.teamBase,'binding-repair-last-check.json'),{at:new Date().toISOString(),reason:'native_process_tree_not_idle',terminal:t.address,observed:tree,baseline:baselines[t.address]||null});stop('原生背景工作仍在執行，或常駐工具基線尚未核對。');}return tree;};
    const inspect=(scope,id)=>{
     let actual;try{actual=directTerminal(scope,id);}catch(error){if(missingTerminal(error))return null;throw error;}
     if(!actual)stop('無法核對原終端身分。');
     const t=actual.t;if(t.state==='finished')return null;
     if(t.state!=='live'||!Number.isSafeInteger(t.pid)||t.pid<=0||!workerProvider(t))stop('原程序或引擎狀態不明。');
     if(!['idle','done'].includes(t.status?.state)&&id!==c.terminal)stop('仍有代理正在工作或等待確認。');
-    terminals.set(id,{id,pid:t.pid,turn:t.turn??null,app:t.status.app,state:t.status.state,cwd:t.cwd,parent:t.parent??null,labels:t.labels});return actual;
+    terminals.set(id,{id,pid:t.pid,turn:t.turn??null,app:t.status.app,state:t.status.state,cwd:t.cwd,parent:t.parent??null,labels:t.labels,processes:processes(t)});return actual;
    };
    load(path.join(c.teamBase,'roster.json'),true);
    for(const scope of scopes){
@@ -377,7 +380,7 @@ function repairIdleBindings(c,agentId,requestId){
       if(old.state!=='finished'&&(old.state!=='live'||!['idle','done'].includes(old.status?.state)))stop('已退役的原程序仍有工作或確認待處理。');
       if(old.state==='live'){
        if(!Number.isSafeInteger(old.pid)||old.pid<=0||!workerProvider(old))stop('已退役原程序的身分不明。');
-       terminals.set(id,{id,pid:old.pid,turn:old.turn??null,app:old.status.app,state:old.status.state,cwd:old.cwd,parent:old.parent??null,labels:old.labels});
+       terminals.set(id,{id,pid:old.pid,turn:old.turn??null,app:old.status.app,state:old.status.state,cwd:old.cwd,parent:old.parent??null,labels:old.labels,processes:processes(old)});
       }
       continue;
      }
@@ -393,7 +396,7 @@ function repairIdleBindings(c,agentId,requestId){
       if(b.legacyOwner!==c.terminal){
        const owner=c.run('hc',['get',b.legacyOwner]);
        if(owner.address!==b.legacyOwner||owner.cwd!==c.cwd||owner.parent||owner.state!=='live'||!Number.isSafeInteger(owner.pid)||owner.pid<=0||!['idle','done'].includes(owner.status?.state)||!workerProvider(owner))stop('舊主管仍在工作或狀態不明。');
-       terminals.set(owner.address,{id:owner.address,pid:owner.pid,turn:owner.turn??null,app:owner.status.app,state:owner.status.state,cwd:owner.cwd,parent:null,labels:owner.labels});
+       terminals.set(owner.address,{id:owner.address,pid:owner.pid,turn:owner.turn??null,app:owner.status.app,state:owner.status.state,cwd:owner.cwd,parent:null,labels:owner.labels,processes:processes(owner)});
       }
      }
      if(b.agentId===agentId)matches.push({id,binding:b,scope});
@@ -424,7 +427,7 @@ function repairIdleBindings(c,agentId,requestId){
     if(fs.readFileSync(file,'utf8')!==before.content||fs.lstatSync(file).ino!==before.ino)stop('保存前綁定已變更。');
     save(file,all);changed.push({before,after:fs.readFileSync(file,'utf8')});
    }
-   for(const t of third.terminals){const now=c.run('hc',['get',t.id]);if(now.pid!==t.pid||(now.turn??null)!==t.turn||now.status?.app!==t.app||now.cwd!==t.cwd||(now.parent??null)!==t.parent||JSON.stringify(now.labels)!==JSON.stringify(t.labels)||(t.id===c.terminal?now.status?.state!==t.state:!['idle','done'].includes(now.status?.state)))stop('保存後程序已開始其他工作。');}
+   for(const t of third.terminals){const now=c.run('hc',['get',t.id]);if(now.pid!==t.pid||(now.turn??null)!==t.turn||now.status?.app!==t.app||now.cwd!==t.cwd||(now.parent??null)!==t.parent||JSON.stringify(now.labels)!==JSON.stringify(t.labels)||(t.id===c.terminal?now.status?.state!==t.state:!['idle','done'].includes(now.status?.state)))stop('保存後程序已開始其他工作。');if(t.processes&&!idleProcessTree(inspectTerminalProcesses(c,now),{verifiedIdle:true,tree:t.processes}))stop('保存後出現原生背景工作。');}
    save(path.join(folder,'repair.json'),{...audit,state:'complete'});
   }catch(error){
    for(const {before,after}of changed.reverse())if(fs.readFileSync(before.file,'utf8')===after)save(before.file,JSON.parse(before.content));

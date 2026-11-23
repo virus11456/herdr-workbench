@@ -4,7 +4,9 @@
 
 牧羊人的 AI 工作台。每個專案從一隻「領頭羊」開始，牠可以拆解目標、派工、收回報和驗收。你也能直接和 Claude、Codex、MiniMax 或 Google 個人版 Antigravity 代理聊天，交付任務或附檔。領頭羊可改名和設定模型，你也能任命其他代理協調。
 
-目前版本 **0.8.11-dev · v60**（介面版本 `20261123-binding60`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v60.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v60.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+目前版本 **0.8.11-dev · v61**（介面版本 `20261123-process61`）。下載 [macOS 安裝包](downloads/herdr-workbench-0.8.11-dev-v61.zip) 和 [SHA-256](downloads/herdr-workbench-0.8.11-dev-v61.zip.sha256)，解壓後開啟 `Install.command`。安裝包使用官方 CLI 依賴，驗證範圍見 [VALIDATION.md](VALIDATION.md)。
+
+v61 補上原生背景工作的保護：CLI 顯示完成，但它啟動的指令仍在執行時，也不能修復舊綁定。只核對相關程序的身分與子程序，不讀取命令參數或環境變數；未知常駐工具先暫緩，經維護者核對閒置基線後才能處理。Claude、Codex、MiniMax 都已實測工作中拒絕變更、閒置後沿用同一角色完成自動修復、派工、官方回報、終端核對及正式驗收。221項隔離測試與26項桌面流程通過。[本輪範圍與限制](VALIDATION.md#0811-dev--v61)。
 
 v60 在領頭羊派工發現舊綁定衝突時，自動核對真實程序、待派訊息、待回覆與未完成協作；能唯一確認應保留的既有獨立會話，且相關工作都已結束時，先備份再退役多餘的舊主管工作綁定。原代理、程序、設定與對話保留。忙碌、等待確認、來源不明或有兩個獨立會話時保留原狀。217項隔離測試通過；正式主機以兩個真實閒置程序重現衝突，自動修復後沿用原代理完成11+18=29、回報、終端核對及驗收，另一桌面同步。[自動修復範圍](VALIDATION.md#0811-dev--v60)、[使用方式](docs/USAGE.md#如何確認沿用代理並完成驗收)。
 
